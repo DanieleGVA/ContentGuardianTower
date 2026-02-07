@@ -1,0 +1,9 @@
+# API Specifications
+
+Questa cartella contiene le specifiche OpenAPI.
+
+## Files previsti
+
+- **openapi.yaml**: Specifica OpenAPI completa per l'API Server
+- **schemas/**: JSON schemas per request/response
+- **examples/**: Esempi di request/response per ogni endpoint

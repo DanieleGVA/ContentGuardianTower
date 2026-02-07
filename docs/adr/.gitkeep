@@ -1,0 +1,40 @@
+# Architecture Decision Records (ADRs)
+
+Questa cartella contiene le Architecture Decision Records.
+
+## Formato
+
+Ogni ADR dovrebbe seguire il template:
+
+```markdown
+# ADR-XXX: Titolo della Decisione
+
+**Status**: Proposed | Accepted | Deprecated | Superseded
+
+**Date**: YYYY-MM-DD
+
+## Context
+
+Descrizione del problema e del contesto.
+
+## Decision
+
+Decisione presa.
+
+## Consequences
+
+Conseguenze positive e negative della decisione.
+
+## Alternatives Considered
+
+Alternative considerate e perché sono state scartate.
+```
+
+## ADRs Previsti
+
+- Module boundaries definition
+- State machine design
+- RBAC enforcement strategy
+- Change detection approach
+- LLM integration pattern
+- Elasticsearch schema design

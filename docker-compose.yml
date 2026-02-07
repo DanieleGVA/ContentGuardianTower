@@ -1,0 +1,79 @@
+services:
+  # PostgreSQL - System of Record + Job Queue + Search
+  postgres:
+    image: postgres:15-alpine
+    container_name: cgt-postgres
+    environment:
+      POSTGRES_DB: content_guardian_tower
+      POSTGRES_USER: cgt_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cgt_user -d content_guardian_tower"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cgt-network
+
+  # Backend - API Server + Background Worker (single process)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cgt-backend
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://cgt_user:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/content_guardian_tower
+      - SESSION_SECRET=${SESSION_SECRET:-change_me_in_production}
+      - JWT_SECRET=${JWT_SECRET:-change_me_in_production}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - FACEBOOK_APP_ID=${FACEBOOK_APP_ID}
+      - FACEBOOK_APP_SECRET=${FACEBOOK_APP_SECRET}
+      - INSTAGRAM_ACCESS_TOKEN=${INSTAGRAM_ACCESS_TOKEN}
+      - LINKEDIN_CLIENT_ID=${LINKEDIN_CLIENT_ID}
+      - LINKEDIN_CLIENT_SECRET=${LINKEDIN_CLIENT_SECRET}
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./backend:/app
+      - file_storage:/app/storage
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cgt-network
+    restart: unless-stopped
+
+  # Frontend (Development)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: cgt-frontend
+    environment:
+      - VITE_API_URL=http://localhost:3000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - cgt-network
+    restart: unless-stopped
+
+networks:
+  cgt-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  file_storage:

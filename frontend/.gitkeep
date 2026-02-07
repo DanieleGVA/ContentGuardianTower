@@ -1,0 +1,14 @@
+# Frontend Application
+
+React 18 + TypeScript 5 (Vite)
+
+## Caratteristiche
+
+- React 18 with TypeScript strict mode
+- Vite build tool (port 5173)
+- Responsive web (desktop + tablet, not mobile)
+- RBAC navigation
+- 25+ navigation flows
+- Design system
+- State management (React Context / Zustand)
+- Filter persistence (URL state)
