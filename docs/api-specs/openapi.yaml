@@ -1,0 +1,3635 @@
+openapi: 3.1.0
+info:
+  title: Content Guardian Tower API
+  version: 1.0.0
+  description: |
+    REST API for Content Guardian Tower (CGT) -- an AI-first platform for monitoring,
+    analyzing, and governing compliance of digital content (web and social media)
+    across multiple countries.
+
+    Built on Fastify 5, Node.js 20 LTS, TypeScript 5, PostgreSQL 15 with Prisma ORM.
+
+    ## Authentication
+    All endpoints except `GET /health` and `POST /api/auth/login` require a valid
+    JWT Bearer token. Tokens are valid for 24 hours. Passwords are hashed with bcrypt.
+
+    ## RBAC Roles
+    Five roles with country-scoped access control:
+    - **ADMIN** -- Full access to all resources, settings, and user management across all countries.
+    - **GLOBAL_MANAGER** -- Read/write access to operational resources (tickets, sources, exports) across all countries. Read-only access to settings.
+    - **REGIONAL_MANAGER** -- Read/write access to operational resources scoped to assigned countries.
+    - **LOCAL_MANAGER** -- Read/write access to operational resources scoped to assigned countries (local scope).
+    - **VIEWER** -- Read-only access to tickets and dashboards scoped to assigned countries.
+
+    ## Country Scoping
+    All data-bearing endpoints automatically filter results by the authenticated user's
+    country scope. ADMIN and GLOBAL_MANAGER see all countries (empty country scope array
+    means "all countries"). REGIONAL_MANAGER and LOCAL_MANAGER see only their assigned
+    countries. VIEWER sees only their assigned countries in read-only mode.
+
+    ## Pagination
+    All list endpoints support `page`, `pageSize`, `sortBy`, and `sortOrder` query
+    parameters. Responses include a `meta` object with pagination details including
+    `page`, `pageSize`, `total`, and `totalPages`.
+
+    ## IDs and Timestamps
+    - All resource IDs are UUIDs (v4).
+    - All timestamps are ISO 8601 format (e.g., `2026-01-15T10:30:00.000Z`).
+  contact:
+    name: CGT Development Team
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+# ---------------------------------------------------------------------------
+# Global Security -- applied to all endpoints by default
+# ---------------------------------------------------------------------------
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from POST /api/auth/login. Valid for 24 hours.
+
+  # -------------------------------------------------------------------------
+  # Reusable Parameters
+  # -------------------------------------------------------------------------
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: Page number (1-indexed).
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSizeParam:
+      name: pageSize
+      in: query
+      description: Number of items per page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    SortByParam:
+      name: sortBy
+      in: query
+      description: Field name to sort by. Allowed values depend on the endpoint.
+      schema:
+        type: string
+        default: createdAt
+    SortOrderParam:
+      name: sortOrder
+      in: query
+      description: Sort direction.
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: desc
+    IdPathParam:
+      name: id
+      in: path
+      required: true
+      description: Resource UUID.
+      schema:
+        type: string
+        format: uuid
+
+  # -------------------------------------------------------------------------
+  # Schemas
+  # -------------------------------------------------------------------------
+  schemas:
+    # -- Enums ---------------------------------------------------------------
+    RoleEnum:
+      type: string
+      enum: [ADMIN, GLOBAL_MANAGER, REGIONAL_MANAGER, LOCAL_MANAGER, VIEWER]
+      description: User role determining access level and permissions.
+
+    ChannelEnum:
+      type: string
+      enum: [WEB, FACEBOOK, INSTAGRAM, LINKEDIN, YOUTUBE]
+      description: Content channel type.
+
+    SourceTypeEnum:
+      type: string
+      enum: [WEB_OWNED, WEB_SEARCH_DISCOVERY, SOCIAL_ACCOUNT, YOUTUBE_CHANNEL]
+      description: Type of content source.
+
+    ContentTypeEnum:
+      type: string
+      enum: [WEB_PAGE, SOCIAL_POST, SOCIAL_COMMENT, YOUTUBE_VIDEO, YOUTUBE_COMMENT, YOUTUBE_COMMUNITY_POST]
+      description: Type of content item.
+
+    ComplianceStatusEnum:
+      type: string
+      enum: [COMPLIANT, NON_COMPLIANT, UNCERTAIN]
+      description: Result of LLM compliance analysis.
+
+    TicketStatusEnum:
+      type: string
+      enum: [OPEN, IN_PROGRESS, RESOLVED, CLOSED]
+      description: |
+        Ticket lifecycle status. Valid transitions:
+        OPEN -> IN_PROGRESS -> RESOLVED -> CLOSED.
+        OPEN -> CLOSED (direct close).
+        IN_PROGRESS -> OPEN (reopen).
+        RESOLVED -> OPEN (reopen).
+
+    RiskLevelEnum:
+      type: string
+      enum: [LOW, MEDIUM, HIGH, UNCERTAIN_MEDIUM]
+      description: Risk level assigned to a ticket based on compliance analysis confidence and rule severity.
+
+    EscalationLevelEnum:
+      type: string
+      enum: [LOCAL, REGIONAL, GLOBAL]
+      description: Current escalation level of a ticket. Escalation is automatic after 48h of inactivity.
+
+    RuleSeverityEnum:
+      type: string
+      enum: [LOW, MEDIUM, HIGH]
+      description: Severity level of a compliance rule.
+
+    ExportTypeEnum:
+      type: string
+      enum: [TICKETS_CSV, AUDIT_CSV]
+      description: Type of CSV export.
+
+    ExportStatusEnum:
+      type: string
+      enum: [QUEUED, RUNNING, SUCCEEDED, FAILED]
+      description: Current status of an export job.
+
+    RunStatusEnum:
+      type: string
+      enum: [RUNNING, SUCCEEDED, FAILED, PARTIAL, CANCELED]
+      description: Status of an ingestion run.
+
+    IngestionStepEnum:
+      type: string
+      enum:
+        - RUN_START
+        - FETCH_ITEMS
+        - NORMALIZE_HASH
+        - STORE_REVISION
+        - DIFF
+        - ANALYZE_LLM
+        - UPSERT_TICKET
+        - RUN_FINISH
+      description: Steps in the 8-step ingestion pipeline state machine.
+
+    StepStatusEnum:
+      type: string
+      enum: [PENDING, RUNNING, SUCCEEDED, FAILED, SKIPPED]
+      description: Status of an individual ingestion pipeline step.
+
+    TicketEventTypeEnum:
+      type: string
+      enum: [STATUS_CHANGED, ASSIGNED, UNASSIGNED, ESCALATED, COMMENT_ADDED, ATTACHMENT_ADDED, CREATED]
+      description: Type of event recorded in ticket history.
+
+    ActorTypeEnum:
+      type: string
+      enum: [USER, SYSTEM]
+      description: Whether an action was performed by a human user or the system (automated).
+
+    AuditEventTypeEnum:
+      type: string
+      enum:
+        - LOGIN_SUCCESS
+        - LOGIN_FAILURE
+        - LOGOUT
+        - USER_CREATED
+        - USER_UPDATED
+        - USER_PASSWORD_CHANGED
+        - SOURCE_CREATED
+        - SOURCE_UPDATED
+        - SOURCE_DELETED
+        - SOURCE_CREDENTIAL_TESTED
+        - SOURCE_INGESTION_TRIGGERED
+        - RULE_CREATED
+        - RULE_UPDATED
+        - RULE_VERSION_CREATED
+        - RULE_ACTIVATED
+        - RULE_DEACTIVATED
+        - TICKET_CREATED
+        - TICKET_STATUS_CHANGED
+        - TICKET_ASSIGNED
+        - TICKET_UNASSIGNED
+        - TICKET_COMMENT_ADDED
+        - TICKET_ATTACHMENT_ADDED
+        - ESCALATION_TRIGGERED
+        - INGESTION_RUN_STARTED
+        - INGESTION_RUN_COMPLETED
+        - INGESTION_RUN_FAILED
+        - INGESTION_RUN_CANCELLED
+        - EXPORT_REQUESTED
+        - EXPORT_COMPLETED
+        - EXPORT_FAILED
+        - SETTINGS_UPDATED
+        - RETENTION_RUN
+      description: Type of audit event. Matches PostgreSQL enum values. Covers both user-initiated and system-automated actions.
+
+    # -- Common Response Wrappers -------------------------------------------
+    PaginationMeta:
+      type: object
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page:
+          type: integer
+          description: Current page number (1-indexed).
+          example: 1
+        pageSize:
+          type: integer
+          description: Number of items per page.
+          example: 20
+        total:
+          type: integer
+          description: Total number of items matching the query.
+          example: 142
+        totalPages:
+          type: integer
+          description: Total number of pages.
+          example: 8
+
+    ErrorResponse:
+      type: object
+      required: [statusCode, error, message]
+      properties:
+        statusCode:
+          type: integer
+          description: HTTP status code.
+          example: 400
+        error:
+          type: string
+          description: HTTP status text.
+          example: Bad Request
+        message:
+          type: string
+          description: Human-readable error description.
+          example: "Field 'email' is required."
+
+    ValidationErrorResponse:
+      type: object
+      required: [statusCode, error, message, details]
+      properties:
+        statusCode:
+          type: integer
+          description: HTTP status code (always 400 for validation errors).
+          example: 400
+        error:
+          type: string
+          description: HTTP status text.
+          example: Bad Request
+        message:
+          type: string
+          description: Summary error message.
+          example: Validation failed
+        details:
+          type: array
+          description: Per-field validation errors.
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+                description: JSON path of the invalid field.
+                example: email
+              message:
+                type: string
+                description: Validation error description for this field.
+                example: "Must be a valid email address."
+              code:
+                type: string
+                description: Machine-readable validation error code.
+                example: invalid_email
+
+    # -- Health --------------------------------------------------------------
+    HealthResponse:
+      type: object
+      required: [status, timestamp, database]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, error]
+          description: Overall service health status.
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+          description: Current server time.
+        database:
+          type: object
+          required: [connected]
+          properties:
+            connected:
+              type: boolean
+              description: Whether the PostgreSQL database is reachable.
+              example: true
+            latencyMs:
+              type: number
+              description: Database ping latency in milliseconds.
+              example: 2.4
+
+    # -- Auth ----------------------------------------------------------------
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Username or email address.
+          example: admin@cgt.local
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: User password. Verified against bcrypt hash.
+          example: "********"
+
+    LoginResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [token, expiresAt, user]
+          properties:
+            token:
+              type: string
+              description: JWT Bearer token. Include in Authorization header as "Bearer <token>".
+            expiresAt:
+              type: string
+              format: date-time
+              description: Token expiration timestamp (24h from issuance).
+            user:
+              $ref: "#/components/schemas/UserSummary"
+
+    RefreshTokenResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [token, expiresAt]
+          properties:
+            token:
+              type: string
+              description: New JWT Bearer token.
+            expiresAt:
+              type: string
+              format: date-time
+              description: New token expiration timestamp (24h from issuance).
+
+    UserSummary:
+      type: object
+      required: [id, username, email, fullName, role, countryCodes, isEnabled]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        fullName:
+          type: string
+        role:
+          $ref: "#/components/schemas/RoleEnum"
+        countryScopeType:
+          type: string
+          enum: [ALL, LIST]
+          description: |
+            Country scope type. ALL means access to all countries (ADMIN, GLOBAL_MANAGER).
+            LIST means access is limited to the countries in countryCodes array.
+        countryCodes:
+          type: array
+          items:
+            type: string
+          description: ISO 3166-1 alpha-2 country codes the user is scoped to. Empty array means all countries (ADMIN, GLOBAL_MANAGER).
+          example: ["IT", "ES", "FR"]
+        isEnabled:
+          type: boolean
+          description: Whether the user account is active.
+
+    MeResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/UserSummary"
+
+    # -- Users ---------------------------------------------------------------
+    UserResponse:
+      type: object
+      required: [id, username, email, fullName, role, countryCodes, isEnabled, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        fullName:
+          type: string
+        role:
+          $ref: "#/components/schemas/RoleEnum"
+        countryScopeType:
+          type: string
+          enum: [ALL, MULTI, SINGLE]
+          description: Derived from role. ALL for ADMIN/GLOBAL_MANAGER, MULTI for REGIONAL_MANAGER, SINGLE for LOCAL_MANAGER/VIEWER.
+        countryCodes:
+          type: array
+          items:
+            type: string
+          description: ISO 3166-1 alpha-2 codes. Empty means all countries.
+          example: ["IT", "ES"]
+        isEnabled:
+          type: boolean
+          description: Whether the user account is active. Disabled users cannot log in.
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the user's most recent successful login.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UserListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/UserResponse"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    CreateUserRequest:
+      type: object
+      required: [username, fullName, email, password, role]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 100
+          description: Unique username for login.
+        fullName:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: User display name.
+        email:
+          type: string
+          format: email
+          description: Unique email address.
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Password (will be bcrypt-hashed before storage).
+        role:
+          $ref: "#/components/schemas/RoleEnum"
+        countryCodes:
+          type: array
+          items:
+            type: string
+            minLength: 2
+            maxLength: 2
+          description: |
+            ISO 3166-1 alpha-2 country codes. Required for REGIONAL_MANAGER,
+            LOCAL_MANAGER, and VIEWER. Must be empty or omitted for ADMIN and
+            GLOBAL_MANAGER.
+        isEnabled:
+          type: boolean
+          default: true
+          description: Whether the account should be active immediately.
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        fullName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        email:
+          type: string
+          format: email
+        role:
+          $ref: "#/components/schemas/RoleEnum"
+        countryCodes:
+          type: array
+          items:
+            type: string
+        isEnabled:
+          type: boolean
+      minProperties: 1
+      description: Partial update. Only provided fields are modified.
+
+    ChangePasswordRequest:
+      type: object
+      required: [newPassword]
+      properties:
+        newPassword:
+          type: string
+          format: password
+          minLength: 8
+          description: New password (will be bcrypt-hashed before storage).
+
+    # -- Sources -------------------------------------------------------------
+    SourceResponse:
+      type: object
+      required:
+        - id
+        - name
+        - channel
+        - sourceType
+        - country
+        - isEnabled
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Human-readable source name.
+          example: "Corporate Blog IT"
+        channel:
+          $ref: "#/components/schemas/ChannelEnum"
+        sourceType:
+          $ref: "#/components/schemas/SourceTypeEnum"
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code this source belongs to.
+          example: IT
+        isEnabled:
+          type: boolean
+          description: Whether the source is actively being ingested.
+        url:
+          type: string
+          format: uri
+          description: Primary URL for web sources, or profile/page URL for social sources.
+        config:
+          type: object
+          description: Channel-specific configuration (scraping selectors, API parameters, search keywords, etc.).
+          additionalProperties: true
+        credential:
+          type: object
+          nullable: true
+          description: Associated credential summary for social media sources. Secrets are never exposed.
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+              description: Human-readable label for the credential.
+              example: "Facebook Page Token - IT"
+            channel:
+              $ref: "#/components/schemas/ChannelEnum"
+            lastTestedAt:
+              type: string
+              format: date-time
+              nullable: true
+            lastTestSuccess:
+              type: boolean
+              nullable: true
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+        scheduleIntervalMinutes:
+          type: integer
+          description: How often this source should be ingested, in minutes.
+          example: 1440
+        lastIngestedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp of the last completed ingestion run for this source.
+        deletedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Soft delete timestamp. Null if the source is active.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SourceListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceResponse"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    CreateSourceRequest:
+      type: object
+      required: [name, channel, sourceType, country]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        channel:
+          $ref: "#/components/schemas/ChannelEnum"
+        sourceType:
+          $ref: "#/components/schemas/SourceTypeEnum"
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+          description: ISO 3166-1 alpha-2 country code.
+        url:
+          type: string
+          format: uri
+          description: Primary URL. Required for WEB_OWNED and WEB_SEARCH_DISCOVERY.
+        config:
+          type: object
+          additionalProperties: true
+          description: Channel-specific configuration.
+        credentialSecrets:
+          type: object
+          additionalProperties: true
+          description: |
+            Credential secrets for social media sources (API keys, tokens, etc.).
+            Stored encrypted. Never returned in responses. Provide only when creating
+            or updating credentials.
+          example:
+            accessToken: "EAABs..."
+            pageId: "123456789"
+        credentialName:
+          type: string
+          maxLength: 200
+          description: Human-readable label for the credential (when providing credentialSecrets).
+        isEnabled:
+          type: boolean
+          default: true
+        scheduleIntervalMinutes:
+          type: integer
+          minimum: 15
+          description: Ingestion interval in minutes. Defaults to system setting.
+
+    UpdateSourceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        url:
+          type: string
+          format: uri
+        config:
+          type: object
+          additionalProperties: true
+        credentialSecrets:
+          type: object
+          additionalProperties: true
+          description: Updated credential secrets. Stored encrypted.
+        credentialName:
+          type: string
+          maxLength: 200
+        isEnabled:
+          type: boolean
+        scheduleIntervalMinutes:
+          type: integer
+          minimum: 15
+      minProperties: 1
+      description: Partial update. Only provided fields are modified.
+
+    CredentialTestResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [success, testedAt]
+          properties:
+            success:
+              type: boolean
+              description: Whether the credential connectivity test passed.
+            testedAt:
+              type: string
+              format: date-time
+            error:
+              type: string
+              description: Error message if the test failed.
+
+    TriggerIngestionResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [runId, status, message]
+          properties:
+            runId:
+              type: string
+              format: uuid
+              description: ID of the newly created ingestion run.
+            status:
+              $ref: "#/components/schemas/RunStatusEnum"
+            message:
+              type: string
+              description: Confirmation message.
+              example: "Ingestion run triggered for source 'Corporate Blog IT'."
+
+    # -- Rules ---------------------------------------------------------------
+    RuleVersionResponse:
+      type: object
+      required: [id, ruleId, versionNumber, prompt, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ruleId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+          minimum: 1
+          description: Auto-incrementing version number within this rule.
+        prompt:
+          type: string
+          description: LLM prompt template for compliance evaluation.
+        parameters:
+          type: object
+          description: Version-specific parameters (thresholds, keywords, regex patterns, etc.).
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        createdById:
+          type: string
+          format: uuid
+          description: User who created this version.
+
+    RuleResponse:
+      type: object
+      required:
+        - id
+        - name
+        - severity
+        - channels
+        - countries
+        - isActive
+        - activeVersion
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "EU Cookie Consent Disclosure"
+        description:
+          type: string
+          description: Detailed description of what this rule checks.
+        severity:
+          $ref: "#/components/schemas/RuleSeverityEnum"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChannelEnum"
+          description: Content channels this rule applies to.
+        countries:
+          type: array
+          items:
+            type: string
+          description: Countries this rule applies to (ISO 3166-1 alpha-2 codes).
+          example: ["IT", "ES", "FR", "DE"]
+        isActive:
+          type: boolean
+          description: Whether the rule is currently active and applied during ingestion.
+        activeVersion:
+          $ref: "#/components/schemas/RuleVersionResponse"
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleVersionResponse"
+          description: Version history for this rule. Only included in single-resource responses (GET /api/rules/{id}).
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    RuleListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuleResponse"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    CreateRuleRequest:
+      type: object
+      required: [name, severity, channels, countries, prompt]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        severity:
+          $ref: "#/components/schemas/RuleSeverityEnum"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChannelEnum"
+          minItems: 1
+          description: At least one channel must be specified.
+        countries:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: At least one country code must be specified.
+        prompt:
+          type: string
+          minLength: 1
+          description: LLM prompt template for the initial version (version 1).
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Optional parameters for the initial version.
+
+    UpdateRuleMetadataRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        severity:
+          $ref: "#/components/schemas/RuleSeverityEnum"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChannelEnum"
+          minItems: 1
+        countries:
+          type: array
+          items:
+            type: string
+          minItems: 1
+      minProperties: 1
+      description: Update rule metadata. Does not create a new version. Only provided fields are modified.
+
+    CreateRuleVersionRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+          minLength: 1
+          description: New LLM prompt template for this version.
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Version-specific parameters.
+
+    # -- Tickets -------------------------------------------------------------
+    TicketListItem:
+      type: object
+      description: Denormalized ticket representation for list views. Includes key fields without full nested data.
+      required:
+        - id
+        - title
+        - status
+        - riskLevel
+        - escalationLevel
+        - country
+        - channel
+        - sourceId
+        - sourceName
+        - complianceStatus
+        - isEscalated
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: "Non-compliant content detected on Corporate Blog"
+        status:
+          $ref: "#/components/schemas/TicketStatusEnum"
+        riskLevel:
+          $ref: "#/components/schemas/RiskLevelEnum"
+        escalationLevel:
+          $ref: "#/components/schemas/EscalationLevelEnum"
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code.
+          example: IT
+        channel:
+          $ref: "#/components/schemas/ChannelEnum"
+        sourceId:
+          type: string
+          format: uuid
+        sourceName:
+          type: string
+        ruleId:
+          type: string
+          format: uuid
+        ruleName:
+          type: string
+        complianceStatus:
+          $ref: "#/components/schemas/ComplianceStatusEnum"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: LLM confidence score.
+          example: 0.87
+        contentUrl:
+          type: string
+          format: uri
+          description: URL of the content that triggered the ticket.
+        contentSnippet:
+          type: string
+          description: Truncated content excerpt (PII-redacted).
+        assigneeId:
+          type: string
+          format: uuid
+          nullable: true
+        assigneeName:
+          type: string
+          nullable: true
+        isEscalated:
+          type: boolean
+          description: Whether the ticket has been auto-escalated after 48h inactivity.
+        isOverdue:
+          type: boolean
+          description: Whether the ticket is past its expected resolution time.
+        escalatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    TicketResponse:
+      type: object
+      description: Full ticket detail including nested revision, analysis, events, and comments.
+      required:
+        - id
+        - title
+        - status
+        - riskLevel
+        - escalationLevel
+        - country
+        - channel
+        - sourceId
+        - sourceName
+        - complianceStatus
+        - isEscalated
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: "Non-compliant content detected on Corporate Blog"
+        status:
+          $ref: "#/components/schemas/TicketStatusEnum"
+        riskLevel:
+          $ref: "#/components/schemas/RiskLevelEnum"
+        escalationLevel:
+          $ref: "#/components/schemas/EscalationLevelEnum"
+        country:
+          type: string
+          example: IT
+        channel:
+          $ref: "#/components/schemas/ChannelEnum"
+        sourceId:
+          type: string
+          format: uuid
+        sourceName:
+          type: string
+        ruleId:
+          type: string
+          format: uuid
+        ruleName:
+          type: string
+        complianceStatus:
+          $ref: "#/components/schemas/ComplianceStatusEnum"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: LLM confidence score.
+          example: 0.87
+        evidence:
+          type: string
+          description: Extracted evidence supporting the compliance verdict (PII-redacted).
+        contentUrl:
+          type: string
+          format: uri
+          description: URL of the content that triggered the ticket.
+        contentSnippet:
+          type: string
+          description: Truncated content excerpt (PII-redacted).
+        contentType:
+          $ref: "#/components/schemas/ContentTypeEnum"
+        assigneeId:
+          type: string
+          format: uuid
+          nullable: true
+        assigneeName:
+          type: string
+          nullable: true
+        isEscalated:
+          type: boolean
+          description: Whether the ticket has been auto-escalated after 48h inactivity.
+        escalatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        latestRevision:
+          $ref: "#/components/schemas/RevisionResponse"
+        analysisSummary:
+          type: object
+          description: Summary of the LLM analysis result that generated this ticket.
+          properties:
+            analysisId:
+              type: string
+              format: uuid
+            ruleVersionId:
+              type: string
+              format: uuid
+            complianceStatus:
+              $ref: "#/components/schemas/ComplianceStatusEnum"
+            confidence:
+              type: number
+              format: float
+              minimum: 0
+              maximum: 1
+            evidence:
+              type: string
+            analyzedAt:
+              type: string
+              format: date-time
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/TicketEventResponse"
+          description: Recent ticket events (status changes, assignments, escalations).
+        comments:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommentResponse"
+          description: Comments on this ticket.
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttachmentResponse"
+          description: File attachments on this ticket.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    TicketListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/TicketListItem"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    UpdateTicketStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/TicketStatusEnum"
+        reason:
+          type: string
+          maxLength: 2000
+          description: Optional reason for the status change (recorded in audit trail).
+
+    AssignTicketRequest:
+      type: object
+      required: [assigneeId]
+      properties:
+        assigneeId:
+          type: string
+          format: uuid
+          description: |
+            ID of the user to assign the ticket to. The assignee must have access
+            to the ticket's country scope. Set to null to unassign.
+          nullable: true
+
+    # -- Comments ------------------------------------------------------------
+    CommentResponse:
+      type: object
+      required: [id, ticketId, authorId, authorName, body, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ticketId:
+          type: string
+          format: uuid
+        authorId:
+          type: string
+          format: uuid
+        authorName:
+          type: string
+        body:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateCommentRequest:
+      type: object
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 10000
+          description: Comment text.
+
+    # -- Attachments ---------------------------------------------------------
+    AttachmentResponse:
+      type: object
+      required: [id, ticketId, filename, mimeType, sizeBytes, uploadedById, uploadedByName, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ticketId:
+          type: string
+          format: uuid
+        filename:
+          type: string
+          example: screenshot.png
+        mimeType:
+          type: string
+          example: image/png
+        sizeBytes:
+          type: integer
+          description: File size in bytes.
+          example: 245760
+        uploadedById:
+          type: string
+          format: uuid
+        uploadedByName:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    # -- Ticket Events -------------------------------------------------------
+    TicketEventResponse:
+      type: object
+      required: [id, ticketId, eventType, actorType, timestamp]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ticketId:
+          type: string
+          format: uuid
+        eventType:
+          $ref: "#/components/schemas/TicketEventTypeEnum"
+        actorType:
+          $ref: "#/components/schemas/ActorTypeEnum"
+        actorId:
+          type: string
+          format: uuid
+          nullable: true
+          description: User ID for USER actors, null for SYSTEM actors.
+        actorName:
+          type: string
+          description: Display name of the actor (user name or "System").
+        previousValue:
+          type: string
+          nullable: true
+          description: Previous value (e.g., old status, previous assignee).
+        newValue:
+          type: string
+          nullable: true
+          description: New value (e.g., new status, new assignee).
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional event-specific structured data.
+        timestamp:
+          type: string
+          format: date-time
+
+    # -- Revisions -----------------------------------------------------------
+    RevisionResponse:
+      type: object
+      required: [id, sourceId, contentKey, contentUrl, fetchedAt, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        contentKey:
+          type: string
+          description: "SHA-256 hash of normalized_text + canonical_url for deduplication."
+        contentUrl:
+          type: string
+          format: uri
+        contentType:
+          $ref: "#/components/schemas/ContentTypeEnum"
+        title:
+          type: string
+          description: Content title or headline.
+        normalizedText:
+          type: string
+          description: Normalized content text (PII-redacted).
+        changed:
+          type: boolean
+          description: Whether this revision differs from the previous one (hash comparison).
+        fetchedAt:
+          type: string
+          format: date-time
+          description: When the content was fetched from the source.
+        createdAt:
+          type: string
+          format: date-time
+
+    RevisionListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/RevisionResponse"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    # -- Ingestion Runs ------------------------------------------------------
+    IngestionStepResponse:
+      type: object
+      required: [step, status]
+      properties:
+        step:
+          $ref: "#/components/schemas/IngestionStepEnum"
+        status:
+          $ref: "#/components/schemas/StepStatusEnum"
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        itemsProcessed:
+          type: integer
+          nullable: true
+          description: Number of items successfully processed in this step.
+        itemsFailed:
+          type: integer
+          nullable: true
+          description: Number of items that failed in this step.
+        error:
+          type: string
+          nullable: true
+          description: Error message if the step failed.
+
+    IngestionRunResponse:
+      type: object
+      required:
+        - id
+        - sourceId
+        - sourceName
+        - status
+        - trigger
+        - steps
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        sourceId:
+          type: string
+          format: uuid
+        sourceName:
+          type: string
+        channel:
+          $ref: "#/components/schemas/ChannelEnum"
+        country:
+          type: string
+          description: Country of the source (ISO 3166-1 alpha-2).
+        status:
+          $ref: "#/components/schemas/RunStatusEnum"
+        trigger:
+          type: string
+          enum: [scheduled, manual]
+          description: Whether the run was triggered by the scheduler or manually by a user.
+        cancelRequested:
+          type: boolean
+          description: True if a soft cancel has been requested. Worker checks between steps.
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/IngestionStepResponse"
+          description: Status of each step in the 8-step ingestion pipeline.
+        itemsTotal:
+          type: integer
+          nullable: true
+          description: Total content items discovered in this run.
+        itemsChanged:
+          type: integer
+          nullable: true
+          description: Items that had content changes (passed diff step).
+        itemsAnalyzed:
+          type: integer
+          nullable: true
+          description: Items sent to LLM analysis.
+        ticketsCreated:
+          type: integer
+          nullable: true
+          description: New tickets created from non-compliant/uncertain content.
+        ticketsUpdated:
+          type: integer
+          nullable: true
+          description: Existing tickets updated from this run.
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        error:
+          type: string
+          nullable: true
+          description: Top-level error message if the run failed.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    IngestionRunListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/IngestionRunResponse"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    # -- Dashboard -----------------------------------------------------------
+    DashboardKPIResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required:
+            - ticketsByStatus
+            - ticketsByRisk
+            - ticketsByCountry
+            - ticketsByChannel
+            - escalationCount
+            - recentActivity
+            - generatedAt
+          properties:
+            ticketsByStatus:
+              type: object
+              description: Count of tickets grouped by status.
+              properties:
+                OPEN:
+                  type: integer
+                IN_PROGRESS:
+                  type: integer
+                RESOLVED:
+                  type: integer
+                CLOSED:
+                  type: integer
+            ticketsByRisk:
+              type: object
+              description: Count of open/in-progress tickets grouped by risk level.
+              properties:
+                LOW:
+                  type: integer
+                MEDIUM:
+                  type: integer
+                HIGH:
+                  type: integer
+                UNCERTAIN_MEDIUM:
+                  type: integer
+            ticketsByCountry:
+              type: object
+              additionalProperties:
+                type: integer
+              description: Map of ISO 3166-1 alpha-2 country code to open ticket count.
+              example:
+                IT: 34
+                ES: 21
+                FR: 15
+            ticketsByChannel:
+              type: object
+              additionalProperties:
+                type: integer
+              description: Map of channel to open ticket count.
+              example:
+                WEB: 20
+                FACEBOOK: 15
+                INSTAGRAM: 10
+            escalationCount:
+              type: integer
+              description: Number of currently escalated tickets.
+            recentActivity:
+              type: object
+              description: Summary counts of recent activity.
+              required: [last24h, last7d]
+              properties:
+                last24h:
+                  type: object
+                  properties:
+                    ticketsCreated:
+                      type: integer
+                    ticketsResolved:
+                      type: integer
+                    ingestionRunsTotal:
+                      type: integer
+                    ingestionRunsSucceeded:
+                      type: integer
+                    ingestionRunsFailed:
+                      type: integer
+                last7d:
+                  type: object
+                  properties:
+                    ticketsCreated:
+                      type: integer
+                    ticketsResolved:
+                      type: integer
+                    ingestionRunsTotal:
+                      type: integer
+                    ingestionRunsSucceeded:
+                      type: integer
+                    ingestionRunsFailed:
+                      type: integer
+            generatedAt:
+              type: string
+              format: date-time
+              description: Timestamp when the KPI data was computed.
+
+    # -- Audit Events --------------------------------------------------------
+    AuditEventResponse:
+      type: object
+      required: [id, eventType, actorType, timestamp]
+      properties:
+        id:
+          type: string
+          format: uuid
+        eventType:
+          $ref: "#/components/schemas/AuditEventTypeEnum"
+        actorType:
+          $ref: "#/components/schemas/ActorTypeEnum"
+        actorId:
+          type: string
+          format: uuid
+          nullable: true
+          description: User ID who performed the action, or null for system-automated actions.
+        actorName:
+          type: string
+          description: Display name of the actor (user name or "System").
+        entityType:
+          type: string
+          description: Type of entity affected (user, source, rule, ticket, ingestion_run, export, settings).
+          example: ticket
+        entityId:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID of the affected entity.
+        country:
+          type: string
+          nullable: true
+          description: Country associated with the event (for country-scoped filtering).
+        description:
+          type: string
+          description: Human-readable event description.
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Event-specific structured data (e.g., old/new values for updates).
+        ipAddress:
+          type: string
+          description: IP address of the requesting client (for user-initiated events).
+        timestamp:
+          type: string
+          format: date-time
+
+    AuditEventListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEventResponse"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    # -- Exports -------------------------------------------------------------
+    ExportTicketsRequest:
+      type: object
+      properties:
+        filters:
+          type: object
+          description: |
+            Filter parameters matching the ticket list endpoint query parameters.
+            All fields are optional. Only matching tickets are included in the export.
+          properties:
+            status:
+              type: string
+              description: Comma-separated ticket statuses.
+            riskLevel:
+              type: string
+              description: Comma-separated risk levels.
+            escalated:
+              type: boolean
+            country:
+              type: string
+            channel:
+              $ref: "#/components/schemas/ChannelEnum"
+            sourceId:
+              type: string
+              format: uuid
+            ruleId:
+              type: string
+              format: uuid
+            assigneeId:
+              type: string
+            complianceStatus:
+              $ref: "#/components/schemas/ComplianceStatusEnum"
+            createdAfter:
+              type: string
+              format: date-time
+            createdBefore:
+              type: string
+              format: date-time
+            q:
+              type: string
+              description: Full-text search query.
+
+    ExportAuditRequest:
+      type: object
+      properties:
+        filters:
+          type: object
+          description: |
+            Filter parameters matching the audit events list endpoint query parameters.
+            All fields are optional. Only matching events are included in the export.
+          properties:
+            eventType:
+              type: string
+              description: Comma-separated event types.
+            actorId:
+              type: string
+              format: uuid
+            entityType:
+              type: string
+            entityId:
+              type: string
+              format: uuid
+            country:
+              type: string
+            after:
+              type: string
+              format: date-time
+            before:
+              type: string
+              format: date-time
+            q:
+              type: string
+              description: Full-text search query.
+
+    ExportResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [id, exportType, status, createdAt]
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: Export job ID. Use to poll status and download.
+            exportType:
+              $ref: "#/components/schemas/ExportTypeEnum"
+            status:
+              $ref: "#/components/schemas/ExportStatusEnum"
+            rowCount:
+              type: integer
+              nullable: true
+              description: Number of rows in the export (populated when SUCCEEDED).
+            maxRowsEnforced:
+              type: boolean
+              description: Whether the export was limited by the max rows setting.
+            filename:
+              type: string
+              nullable: true
+              description: Generated filename of the CSV file.
+            createdAt:
+              type: string
+              format: date-time
+            completedAt:
+              type: string
+              format: date-time
+              nullable: true
+            error:
+              type: string
+              nullable: true
+              description: Error message if the export failed.
+
+    # -- System Settings -----------------------------------------------------
+    SystemSettingsResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required:
+            - id
+            - allowedCountryCodes
+            - retentionDays
+            - escalationAfterHours
+            - maxRetriesPerStep
+            - defaultScheduleIntervalMinutes
+            - llmProvider
+            - llmModel
+            - llmMaxTokens
+            - exportMaxRows
+            - piiRedactionEnabledDefault
+            - updatedAt
+          properties:
+            id:
+              type: string
+            allowedCountryCodes:
+              type: array
+              items:
+                type: string
+              description: ISO 3166-1 alpha-2 country codes enabled in the system.
+              example: ["IT", "ES", "FR", "DE"]
+            languageConfidenceThreshold:
+              type: number
+              format: float
+              description: Minimum confidence threshold for language detection (0-1).
+              example: 0.8
+            defaultDueHoursHigh:
+              type: integer
+              description: Default due time in hours for HIGH risk tickets.
+              example: 24
+            defaultDueHoursMedium:
+              type: integer
+              description: Default due time in hours for MEDIUM risk tickets.
+              example: 72
+            defaultDueDaysLow:
+              type: integer
+              description: Default due time in days for LOW risk tickets.
+              example: 7
+            uncertainDefaultRiskLevel:
+              $ref: "#/components/schemas/RiskLevelEnum"
+            escalationAfterHours:
+              type: integer
+              description: Hours of inactivity before automatic ticket escalation.
+              example: 48
+            retentionDays:
+              type: integer
+              description: Data retention period in days (default 180 = 6 months).
+              example: 180
+            piiRedactionEnabledDefault:
+              type: boolean
+              description: Whether PII redaction is enabled by default for LLM analysis.
+              example: true
+            llmProvider:
+              type: string
+              description: LLM provider identifier.
+              example: openai
+            llmModel:
+              type: string
+              description: LLM model identifier.
+              example: gpt-4o
+            llmMaxTokens:
+              type: integer
+              description: Maximum tokens per LLM request.
+              example: 4096
+            exportMaxRows:
+              type: integer
+              description: Maximum rows allowed in CSV exports. Requests exceeding this return 422.
+              example: 50000
+            maxRetriesPerStep:
+              type: integer
+              description: Maximum retry attempts per ingestion step (exponential backoff).
+              example: 3
+            defaultScheduleIntervalMinutes:
+              type: integer
+              description: Default ingestion interval for new sources (minutes).
+              example: 1440
+            updatedAt:
+              type: string
+              format: date-time
+
+    UpdateSystemSettingsRequest:
+      type: object
+      properties:
+        allowedCountryCodes:
+          type: array
+          items:
+            type: string
+            minLength: 2
+            maxLength: 2
+        languageConfidenceThreshold:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        defaultDueHoursHigh:
+          type: integer
+          minimum: 1
+        defaultDueHoursMedium:
+          type: integer
+          minimum: 1
+        defaultDueDaysLow:
+          type: integer
+          minimum: 1
+        uncertainDefaultRiskLevel:
+          $ref: "#/components/schemas/RiskLevelEnum"
+        escalationAfterHours:
+          type: integer
+          minimum: 1
+        retentionDays:
+          type: integer
+          minimum: 30
+        piiRedactionEnabledDefault:
+          type: boolean
+        llmProvider:
+          type: string
+        llmModel:
+          type: string
+        llmMaxTokens:
+          type: integer
+          minimum: 256
+          maximum: 128000
+        exportMaxRows:
+          type: integer
+          minimum: 100
+          maximum: 100000
+        maxRetriesPerStep:
+          type: integer
+          minimum: 1
+          maximum: 10
+        defaultScheduleIntervalMinutes:
+          type: integer
+          minimum: 15
+      minProperties: 1
+      description: Partial update. Only provided fields are modified. All changes are logged in the audit trail.
+
+  # -------------------------------------------------------------------------
+  # Reusable Responses
+  # -------------------------------------------------------------------------
+  responses:
+    BadRequest:
+      description: Validation error. The request body or query parameters are invalid.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ErrorResponse"
+              - $ref: "#/components/schemas/ValidationErrorResponse"
+    Unauthorized:
+      description: Authentication required. The JWT token is missing, expired, or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            statusCode: 401
+            error: Unauthorized
+            message: Token expired or invalid.
+    Forbidden:
+      description: Insufficient permissions. The user's role or country scope does not allow this action.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            statusCode: 403
+            error: Forbidden
+            message: You do not have permission to access this resource.
+    NotFound:
+      description: The requested resource was not found or has been deleted.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            statusCode: 404
+            error: Not Found
+            message: Resource not found.
+    Conflict:
+      description: Conflict with current state (e.g., duplicate username, invalid status transition).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            statusCode: 409
+            error: Conflict
+            message: A user with this username already exists.
+    UnprocessableEntity:
+      description: The request is well-formed but cannot be processed (e.g., export row limit exceeded, invalid state transition).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            statusCode: 422
+            error: Unprocessable Entity
+            message: Export would produce 75,000 rows, exceeding the configured limit of 50,000.
+    InternalServerError:
+      description: An unexpected server error occurred.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            statusCode: 500
+            error: Internal Server Error
+            message: An unexpected error occurred. Please try again later.
+
+# ===========================================================================
+# Paths
+# ===========================================================================
+paths:
+  # -------------------------------------------------------------------------
+  # Health
+  # -------------------------------------------------------------------------
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: |
+        Returns service health status including database connectivity.
+        No authentication required. Use for load balancer health probes
+        and monitoring.
+      tags: [Health]
+      security: []
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Auth
+  # -------------------------------------------------------------------------
+  /api/auth/login:
+    post:
+      operationId: login
+      summary: Authenticate user
+      description: |
+        Authenticates with username (or email) and password. Returns a JWT token
+        valid for 24 hours. Passwords are verified against bcrypt hashes.
+        Disabled users (isEnabled=false) cannot log in and will receive 401.
+        Successful logins update the user's lastLoginAt timestamp.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authentication successful.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Invalid credentials or account disabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                statusCode: 401
+                error: Unauthorized
+                message: Invalid username or password.
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/auth/logout:
+    post:
+      operationId: logout
+      summary: Invalidate session
+      description: |
+        Invalidates the current JWT token / session. The token is added to a
+        deny list and cannot be reused. Logout is recorded in the audit log.
+      tags: [Auth]
+      responses:
+        "204":
+          description: Session invalidated successfully. No content returned.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/auth/me:
+    get:
+      operationId: getCurrentUser
+      summary: Get current user profile
+      description: |
+        Returns the profile of the currently authenticated user, including
+        role, country scope, and enabled status. Used by the frontend to
+        determine navigation permissions and data scope.
+      tags: [Auth]
+      responses:
+        "200":
+          description: Current user profile.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/auth/refresh:
+    post:
+      operationId: refreshToken
+      summary: Refresh JWT token
+      description: |
+        Issues a new JWT token using the current valid token. The old token
+        remains valid until its original expiration. Use this to extend
+        sessions without requiring re-authentication. The new token has a
+        fresh 24h expiration.
+      tags: [Auth]
+      responses:
+        "200":
+          description: New token issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefreshTokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Users (Admin only)
+  # -------------------------------------------------------------------------
+  /api/users:
+    get:
+      operationId: listUsers
+      summary: List users
+      description: |
+        Returns a paginated list of users. **ADMIN only.**
+        Filterable by role and enabled status. Supports search by
+        username, full name, or email.
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - $ref: "#/components/parameters/SortByParam"
+        - $ref: "#/components/parameters/SortOrderParam"
+        - name: role
+          in: query
+          description: Filter by role.
+          schema:
+            $ref: "#/components/schemas/RoleEnum"
+        - name: isEnabled
+          in: query
+          description: Filter by enabled status.
+          schema:
+            type: boolean
+        - name: q
+          in: query
+          description: Search by username, full name, or email.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated user list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      operationId: createUser
+      summary: Create user
+      description: |
+        Creates a new user account. **ADMIN only.**
+        Password is stored as a bcrypt hash.
+        Country codes are validated based on role:
+        - ADMIN and GLOBAL_MANAGER must have empty countryCodes.
+        - REGIONAL_MANAGER must have at least one country code.
+        - LOCAL_MANAGER and VIEWER must have exactly one country code.
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/users/{id}:
+    get:
+      operationId: getUser
+      summary: Get user by ID
+      description: Returns a single user by ID. **ADMIN only.**
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: User details.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/UserResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    put:
+      operationId: updateUser
+      summary: Update user
+      description: |
+        Updates an existing user. **ADMIN only.**
+        Can change role, country scope, enable/disable status, display name, and email.
+        Changing role may require updating countryCodes to match role requirements.
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: User updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/users/{id}/password:
+    put:
+      operationId: changeUserPassword
+      summary: Change user password
+      description: |
+        Changes a user's password. **ADMIN only.**
+        The new password is bcrypt-hashed before storage.
+        The change is recorded in the audit log.
+      tags: [Users]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "200":
+          description: Password changed successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/UserResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Sources
+  # -------------------------------------------------------------------------
+  /api/sources:
+    get:
+      operationId: listSources
+      summary: List sources
+      description: |
+        Returns a paginated list of content sources.
+        **ADMIN** has full access. **Managers** can read sources within their country scope.
+        **VIEWER** can read sources within their country scope.
+        Filterable by channel, country, source type, and enabled status.
+        Soft-deleted sources are excluded by default.
+      tags: [Sources]
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - $ref: "#/components/parameters/SortByParam"
+        - $ref: "#/components/parameters/SortOrderParam"
+        - name: channel
+          in: query
+          description: Filter by channel.
+          schema:
+            $ref: "#/components/schemas/ChannelEnum"
+        - name: country
+          in: query
+          description: Filter by country (ISO 3166-1 alpha-2).
+          schema:
+            type: string
+        - name: sourceType
+          in: query
+          description: Filter by source type.
+          schema:
+            $ref: "#/components/schemas/SourceTypeEnum"
+        - name: isEnabled
+          in: query
+          description: Filter by enabled status.
+          schema:
+            type: boolean
+        - name: q
+          in: query
+          description: Search by source name or URL.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated source list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      operationId: createSource
+      summary: Create source
+      description: |
+        Creates a new content source. **ADMIN only.**
+        Source types: WEB_OWNED (owned websites), WEB_SEARCH_DISCOVERY (search-discovered content),
+        SOCIAL_ACCOUNT (Facebook, Instagram, LinkedIn pages), YOUTUBE_CHANNEL.
+        For social sources, provide credentialSecrets with platform API credentials.
+      tags: [Sources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSourceRequest"
+      responses:
+        "201":
+          description: Source created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SourceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/sources/{id}:
+    get:
+      operationId: getSource
+      summary: Get source detail
+      description: |
+        Returns a single source with full configuration details.
+        Accessible by ADMIN and all roles within country scope.
+        Credential secrets are never included in the response.
+      tags: [Sources]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Source details.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SourceResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    put:
+      operationId: updateSource
+      summary: Update source
+      description: |
+        Updates an existing source. **ADMIN only.**
+        Supports partial updates: only provided fields are modified.
+        To rotate credentials, include credentialSecrets in the request body.
+      tags: [Sources]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSourceRequest"
+      responses:
+        "200":
+          description: Source updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SourceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    delete:
+      operationId: deleteSource
+      summary: Soft delete source
+      description: |
+        Soft deletes a source by setting the deletedAt timestamp. **ADMIN only.**
+        The source is hidden from list views but retained for audit purposes.
+        Associated ingestion runs and tickets are not deleted.
+      tags: [Sources]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "204":
+          description: Source soft deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/sources/{id}/test-credential:
+    post:
+      operationId: testSourceCredential
+      summary: Test platform credential connectivity
+      description: |
+        Tests the credential associated with a source by making a lightweight
+        API call to the target platform (e.g., Facebook Graph API, YouTube Data API).
+        **ADMIN only.** Returns success/failure with error details.
+        Updates the credential's lastTestedAt and lastTestSuccess fields.
+      tags: [Sources]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Credential test completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialTestResponse"
+        "400":
+          description: Source does not have an associated credential.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/sources/{id}/trigger:
+    post:
+      operationId: triggerSourceIngestion
+      summary: Manually trigger ingestion
+      description: |
+        Manually triggers an ingestion run for this source. **ADMIN only.**
+        Enqueues a job that executes the 8-step ingestion pipeline.
+        Returns the newly created ingestion run ID.
+      tags: [Sources]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "201":
+          description: Ingestion run triggered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TriggerIngestionResponse"
+        "400":
+          description: Source is disabled or has been soft-deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: An ingestion run is already in progress for this source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Rules
+  # -------------------------------------------------------------------------
+  /api/rules:
+    get:
+      operationId: listRules
+      summary: List rules
+      description: |
+        Returns a paginated list of compliance rules.
+        **ADMIN** has full access. **Managers** can read rules applicable to their country scope.
+        Filterable by severity, channel, country, and active status.
+      tags: [Rules]
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - $ref: "#/components/parameters/SortByParam"
+        - $ref: "#/components/parameters/SortOrderParam"
+        - name: severity
+          in: query
+          description: Filter by severity.
+          schema:
+            $ref: "#/components/schemas/RuleSeverityEnum"
+        - name: channel
+          in: query
+          description: Filter by applicable channel.
+          schema:
+            $ref: "#/components/schemas/ChannelEnum"
+        - name: country
+          in: query
+          description: Filter rules applicable to a specific country.
+          schema:
+            type: string
+        - name: isActive
+          in: query
+          description: Filter by active status.
+          schema:
+            type: boolean
+        - name: q
+          in: query
+          description: Search by rule name or description.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated rule list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      operationId: createRule
+      summary: Create rule
+      description: |
+        Creates a new compliance rule with its initial version (version 1). **ADMIN only.**
+        The rule is created in active state by default. The prompt field defines the
+        LLM prompt template used for compliance evaluation.
+      tags: [Rules]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRuleRequest"
+      responses:
+        "201":
+          description: Rule created with version 1.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RuleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/rules/{id}:
+    get:
+      operationId: getRule
+      summary: Get rule with version history
+      description: |
+        Returns a rule with its active version and full version history.
+        Accessible by ADMIN and Managers within country scope.
+      tags: [Rules]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Rule details with version history.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RuleResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    put:
+      operationId: updateRule
+      summary: Update rule metadata
+      description: |
+        Updates rule metadata (name, description, severity, channels, countries).
+        **ADMIN only.** Does not create a new version. To update the prompt or
+        parameters, use POST /api/rules/{id}/versions.
+      tags: [Rules]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRuleMetadataRequest"
+      responses:
+        "200":
+          description: Rule metadata updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RuleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/rules/{id}/versions:
+    post:
+      operationId: createRuleVersion
+      summary: Create new rule version
+      description: |
+        Creates a new version of a rule with an updated prompt and/or parameters.
+        **ADMIN only.** The new version becomes the active version automatically.
+        Previous versions are preserved for audit purposes and can be viewed
+        via GET /api/rules/{id}.
+      tags: [Rules]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRuleVersionRequest"
+      responses:
+        "201":
+          description: New rule version created and activated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RuleResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/rules/{id}/activate:
+    put:
+      operationId: activateRule
+      summary: Activate rule
+      description: |
+        Activates a deactivated rule. **ADMIN only.**
+        Active rules are applied during ingestion runs. The change is
+        recorded in the audit log.
+      tags: [Rules]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Rule activated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RuleResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Rule is already active.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/rules/{id}/deactivate:
+    put:
+      operationId: deactivateRule
+      summary: Deactivate rule
+      description: |
+        Deactivates a rule. **ADMIN only.**
+        Deactivated rules are not applied to future ingestion runs.
+        Existing tickets created by this rule are not affected.
+        The change is recorded in the audit log.
+      tags: [Rules]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Rule deactivated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/RuleResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Rule is already inactive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Tickets
+  # -------------------------------------------------------------------------
+  /api/tickets:
+    get:
+      operationId: listTickets
+      summary: List tickets
+      description: |
+        Returns a paginated list of tickets filtered by the user's country scope.
+        All authenticated roles can access this endpoint; results are automatically
+        scoped to the user's assigned countries. VIEWER has read-only access.
+        Supports extensive filtering, full-text search, and sorting.
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - $ref: "#/components/parameters/SortByParam"
+        - $ref: "#/components/parameters/SortOrderParam"
+        - name: status
+          in: query
+          description: Filter by ticket status. Supports multiple values (comma-separated).
+          schema:
+            type: string
+          example: OPEN,IN_PROGRESS
+        - name: riskLevel
+          in: query
+          description: Filter by risk level. Supports multiple values (comma-separated).
+          schema:
+            type: string
+          example: HIGH,MEDIUM
+        - name: escalated
+          in: query
+          description: Filter by escalation status.
+          schema:
+            type: boolean
+        - name: country
+          in: query
+          description: Filter by country (ISO 3166-1 alpha-2, within user's scope).
+          schema:
+            type: string
+        - name: channel
+          in: query
+          description: Filter by content channel.
+          schema:
+            $ref: "#/components/schemas/ChannelEnum"
+        - name: sourceId
+          in: query
+          description: Filter by source ID.
+          schema:
+            type: string
+            format: uuid
+        - name: ruleId
+          in: query
+          description: Filter by rule ID.
+          schema:
+            type: string
+            format: uuid
+        - name: assigneeId
+          in: query
+          description: Filter by assignee. Use "unassigned" for tickets with no assignee.
+          schema:
+            type: string
+        - name: complianceStatus
+          in: query
+          description: Filter by compliance status.
+          schema:
+            $ref: "#/components/schemas/ComplianceStatusEnum"
+        - name: overdue
+          in: query
+          description: Filter by overdue status.
+          schema:
+            type: boolean
+        - name: createdAfter
+          in: query
+          description: Filter tickets created after this date (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: createdBefore
+          in: query
+          description: Filter tickets created before this date (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: q
+          in: query
+          description: Full-text search across ticket title, content snippet, and evidence.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated ticket list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/tickets/{id}:
+    get:
+      operationId: getTicket
+      summary: Get ticket detail
+      description: |
+        Returns full ticket details including nested revision, analysis summary,
+        events (status changes, assignments, escalations), comments, and attachments.
+        Country-scoped: the user must have access to the ticket's country.
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Full ticket details.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/TicketResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/tickets/{id}/status:
+    put:
+      operationId: updateTicketStatus
+      summary: Update ticket status
+      description: |
+        Transitions the ticket to a new status. **Managers+ only (not VIEWER).**
+        Valid transitions: OPEN->IN_PROGRESS, IN_PROGRESS->RESOLVED,
+        RESOLVED->CLOSED, OPEN->CLOSED, IN_PROGRESS->OPEN (reopen),
+        RESOLVED->OPEN (reopen).
+        Invalid transitions return 422. Creates an audit trail event.
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTicketStatusRequest"
+      responses:
+        "200":
+          description: Status updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/TicketResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Invalid status transition.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                statusCode: 422
+                error: Unprocessable Entity
+                message: "Cannot transition from CLOSED to IN_PROGRESS."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/tickets/{id}/assign:
+    put:
+      operationId: assignTicket
+      summary: Assign ticket to user
+      description: |
+        Assigns a ticket to a user. **Managers+ only (not VIEWER).**
+        The assignee must have access to the ticket's country scope.
+        Set assigneeId to null to unassign. Creates an audit trail event.
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignTicketRequest"
+      responses:
+        "200":
+          description: Ticket assigned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/TicketResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Assignee does not have access to the ticket's country.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/tickets/{id}/comments:
+    post:
+      operationId: addTicketComment
+      summary: Add comment to ticket
+      description: |
+        Adds a comment to a ticket. **Managers+ only (not VIEWER).**
+        Comments are immutable once created. Creates an audit trail event.
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommentRequest"
+      responses:
+        "201":
+          description: Comment created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CommentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/tickets/{id}/attachments:
+    post:
+      operationId: uploadTicketAttachment
+      summary: Upload attachment to ticket
+      description: |
+        Uploads a file attachment to a ticket. **Managers+ only (not VIEWER).**
+        Files are stored on the local filesystem (Docker volume).
+        Maximum file size: 10 MB. Creates an audit trail event.
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The file to upload (max 10 MB).
+      responses:
+        "201":
+          description: Attachment uploaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AttachmentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: File exceeds maximum size limit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/tickets/{id}/attachments/{attachmentId}/download:
+    get:
+      operationId: downloadTicketAttachment
+      summary: Download attachment
+      description: |
+        Downloads a ticket attachment file. Country-scoped: user must have
+        access to the ticket's country.
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+        - name: attachmentId
+          in: path
+          required: true
+          description: Attachment UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Attachment file content.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              description: 'Attachment filename, e.g., `attachment; filename="screenshot.png"`'
+              schema:
+                type: string
+            Content-Type:
+              description: MIME type of the file.
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/tickets/{id}/revisions:
+    get:
+      operationId: listTicketRevisions
+      summary: List content revisions for ticket
+      description: |
+        Returns the content revision history associated with a ticket's content item.
+        Shows how the content changed over time using hash-based change detection
+        (content_key = sha256(normalized_text + canonical_url)).
+        Ordered by fetchedAt descending.
+      tags: [Tickets]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated revision list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevisionListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Ingestion Runs
+  # -------------------------------------------------------------------------
+  /api/ingestion-runs:
+    get:
+      operationId: listIngestionRuns
+      summary: List ingestion runs
+      description: |
+        Returns a paginated list of ingestion runs.
+        **ADMIN** sees all runs. **GLOBAL_MANAGER** sees all runs.
+        **REGIONAL_MANAGER** sees runs for sources within their country scope.
+        **LOCAL_MANAGER** and **VIEWER** have limited or no access (see ADR-007 navigation table).
+        Filterable by source, channel, status, and date range.
+      tags: [Ingestion Runs]
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - $ref: "#/components/parameters/SortByParam"
+        - $ref: "#/components/parameters/SortOrderParam"
+        - name: sourceId
+          in: query
+          description: Filter by source ID.
+          schema:
+            type: string
+            format: uuid
+        - name: channel
+          in: query
+          description: Filter by channel.
+          schema:
+            $ref: "#/components/schemas/ChannelEnum"
+        - name: status
+          in: query
+          description: Filter by run status.
+          schema:
+            $ref: "#/components/schemas/RunStatusEnum"
+        - name: createdAfter
+          in: query
+          description: Filter runs started after this date (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: createdBefore
+          in: query
+          description: Filter runs started before this date (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Paginated run list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestionRunListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/ingestion-runs/{id}:
+    get:
+      operationId: getIngestionRun
+      summary: Get ingestion run detail with step tracking
+      description: |
+        Returns full details of an ingestion run including status of each of the
+        8 pipeline steps (RUN_START, FETCH_ITEMS, NORMALIZE_HASH, STORE_REVISION,
+        DIFF, ANALYZE_LLM, UPSERT_TICKET, RUN_FINISH). Each step has its own
+        status (PENDING, RUNNING, SUCCEEDED, FAILED, SKIPPED), timing, and
+        item counts.
+      tags: [Ingestion Runs]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Ingestion run details with step tracking.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/IngestionRunResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/ingestion-runs/{id}/cancel:
+    post:
+      operationId: cancelIngestionRun
+      summary: Request soft cancel of running job
+      description: |
+        Requests cancellation of a running ingestion job. **ADMIN only.**
+        Sets the cancelRequested flag. The worker checks this flag between
+        pipeline steps and stops gracefully. Already-completed steps are
+        not rolled back. The run status transitions to CANCELED.
+      tags: [Ingestion Runs]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Cancel requested.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/IngestionRunResponse"
+        "400":
+          description: Run is not in a cancellable state (not RUNNING).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Dashboard
+  # -------------------------------------------------------------------------
+  /api/dashboard/kpis:
+    get:
+      operationId: getDashboardKPIs
+      summary: Get dashboard KPI aggregations
+      description: |
+        Returns aggregated KPI data for the dashboard cockpit.
+        All authenticated roles can access this endpoint.
+        Data is automatically scoped to the user's country scope.
+        Includes: ticket counts by status, risk level, country, and channel;
+        escalation count; recent activity (tickets created/resolved and
+        ingestion runs in last 24h and 7d).
+      tags: [Dashboard]
+      responses:
+        "200":
+          description: Dashboard KPI aggregations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardKPIResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Audit Events
+  # -------------------------------------------------------------------------
+  /api/audit-events:
+    get:
+      operationId: listAuditEvents
+      summary: List audit events
+      description: |
+        Returns a paginated, append-only audit log. **ADMIN only.**
+        Records are immutable. Includes both user-initiated actions (API calls)
+        and system-automated events (scheduled jobs, escalation, retention).
+        Filterable by event type, actor, entity type, entity ID, date range,
+        and country. Supports full-text search.
+      tags: [Audit Events]
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - $ref: "#/components/parameters/SortByParam"
+        - $ref: "#/components/parameters/SortOrderParam"
+        - name: eventType
+          in: query
+          description: Filter by event type. Supports multiple values (comma-separated).
+          schema:
+            type: string
+        - name: actorId
+          in: query
+          description: Filter by actor (user who performed the action).
+          schema:
+            type: string
+            format: uuid
+        - name: entityType
+          in: query
+          description: Filter by entity type (user, source, rule, ticket, ingestion_run, export, settings).
+          schema:
+            type: string
+        - name: entityId
+          in: query
+          description: Filter by entity ID.
+          schema:
+            type: string
+            format: uuid
+        - name: country
+          in: query
+          description: Filter by country associated with the event.
+          schema:
+            type: string
+        - name: after
+          in: query
+          description: Filter events after this timestamp (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: before
+          in: query
+          description: Filter events before this timestamp (ISO 8601).
+          schema:
+            type: string
+            format: date-time
+        - name: q
+          in: query
+          description: Full-text search across event descriptions.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated audit event list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # System Settings (Admin only)
+  # -------------------------------------------------------------------------
+  /api/settings:
+    get:
+      operationId: getSystemSettings
+      summary: Get system settings
+      description: |
+        Returns the current system configuration. **ADMIN only.**
+        Includes retention, escalation, ingestion, LLM, and export settings.
+      tags: [System Settings]
+      responses:
+        "200":
+          description: Current system settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemSettingsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    put:
+      operationId: updateSystemSettings
+      summary: Update system settings
+      description: |
+        Updates system configuration. **ADMIN only.**
+        Supports partial updates: only provided fields are modified.
+        All changes are recorded in the audit log.
+      tags: [System Settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSystemSettingsRequest"
+      responses:
+        "200":
+          description: Settings updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemSettingsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # -------------------------------------------------------------------------
+  # Exports
+  # -------------------------------------------------------------------------
+  /api/exports/tickets:
+    post:
+      operationId: exportTickets
+      summary: Request CSV export of tickets
+      description: |
+        Requests a CSV export of tickets matching the provided filters.
+        **Managers+ and ADMIN.** VIEWER cannot export.
+        Data is scoped to the user's country scope.
+        Returns 422 if the matching row count exceeds the configured
+        exportMaxRows system setting. The export job is created and can
+        be polled for status via GET /api/exports/{id}.
+      tags: [Exports]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportTicketsRequest"
+      responses:
+        "202":
+          description: Export job accepted and queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/exports/audit:
+    post:
+      operationId: exportAudit
+      summary: Request CSV export of audit events
+      description: |
+        Requests a CSV export of audit events matching the provided filters.
+        **ADMIN only.**
+        Returns 422 if the matching row count exceeds the configured
+        exportMaxRows system setting. The export job is created and can
+        be polled for status via GET /api/exports/{id}.
+      tags: [Exports]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportAuditRequest"
+      responses:
+        "202":
+          description: Export job accepted and queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/exports/{id}:
+    get:
+      operationId: getExportStatus
+      summary: Get export status
+      description: |
+        Returns the current status of an export job. Poll this endpoint
+        to check if the export has completed. Once status is SUCCEEDED,
+        use GET /api/exports/{id}/download to retrieve the file.
+      tags: [Exports]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: Export job status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/exports/{id}/download:
+    get:
+      operationId: downloadExport
+      summary: Download completed export file
+      description: |
+        Downloads the CSV file for a completed export. Only available when
+        the export status is SUCCEEDED. Returns 404 if the export has not
+        completed or the file has been cleaned up after the retention period.
+      tags: [Exports]
+      parameters:
+        - $ref: "#/components/parameters/IdPathParam"
+      responses:
+        "200":
+          description: CSV file content.
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              description: 'Attachment filename, e.g., `attachment; filename="tickets-export-2026-01-15.csv"`'
+              schema:
+                type: string
+            Content-Type:
+              description: Always text/csv.
+              schema:
+                type: string
+                example: text/csv
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Export has not completed yet or failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+# ===========================================================================
+# Tags
+# ===========================================================================
+tags:
+  - name: Health
+    description: Service health check endpoint. No authentication required.
+  - name: Auth
+    description: Authentication, session management, and token refresh.
+  - name: Dashboard
+    description: KPI aggregations for the operational cockpit. Country-scoped.
+  - name: Users
+    description: User management -- CRUD operations, password changes. ADMIN only.
+  - name: Sources
+    description: Content source configuration, credential management, and ingestion triggering.
+  - name: Rules
+    description: Compliance rule management with versioning, activation, and deactivation.
+  - name: Tickets
+    description: Compliance ticket lifecycle -- status transitions, assignments, comments, attachments, and revision history.
+  - name: Ingestion Runs
+    description: Content ingestion pipeline monitoring, 8-step tracking, and soft cancel.
+  - name: Audit Events
+    description: Immutable, append-only audit log. ADMIN only.
+  - name: System Settings
+    description: Global system configuration (retention, escalation, LLM, export limits). ADMIN only.
+  - name: Exports
+    description: CSV data exports for tickets and audit events with row limit enforcement.

@@ -4,7 +4,7 @@
 
 **Content Guardian Tower (CGT)** - AI-first platform for monitoring and governing compliance of digital content (web and social media) across multiple countries.
 
-18-agent development architecture with slash commands: `/task`, `/coordinate`, `/execute-plan`, `/plan-phase`, `/architecture-review`, `/qa-review`, `/security-review`, `/design-schema`. Agent specs in `.claude/agents/`.
+18-agent development architecture with slash commands: `/task`, `/coordinate`, `/execute-plan`, `/plan-phase`, `/architecture-review`, `/qa-review`, `/security-review`, `/design-schema`, `/design-ui`. Agent specs in `.claude/agents/`.
 
 ## Technology Stack
 
@@ -72,9 +72,12 @@ Dependency direction: `route handler -> service -> repository -> data layer`
 - **Repository Pattern**: Business logic uses abstractions (e.g. `SearchRepository`), not direct Prisma calls. This enables swapping PostgreSQL full-text search for Elasticsearch later without touching business logic
 - **Plugin/Adapter**: Channel connectors implement `IConnector` interface (pluggable)
 - **State Machine**: 8-step ingestion pipeline (RUN_START -> FETCH_ITEMS -> NORMALIZE+HASH -> STORE_REVISION -> DIFF -> ANALYZE_LLM -> UPSERT_TICKET -> RUN_FINISH). Each step: PENDING/RUNNING/SUCCEEDED/FAILED/SKIPPED
-- **Idempotency**: `content_key = sha256(normalized_text + canonical_url)` for dedup
+- **Idempotency**: `content_key = sha256(normalized_text + canonical_url)` for dedup; `ticket_key = rev:{revision_id}` prevents duplicate tickets
 - **Job Queue**: pgboss (PostgreSQL-backed) with retry, exponential backoff + jitter, soft cancel via `cancel_requested` flag
 - **RBAC**: Admin, Global Manager, Regional Manager, Local Manager, Viewer - with country scope on all queries
+- **Ingestion Trigger**: Both scheduled (per-source `crawl_frequency_minutes`) and manual (`POST /api/v1/ingestion-runs`)
+- **Ticket Due Dates**: Calculated from `system_settings.default_due_hours_*` per risk level; overdue flag tracked
+- **Auto-Escalation**: 48h inactivity on OPEN/IN_PROGRESS tickets, escalation levels LOCAL -> REGIONAL -> GLOBAL
 - **Logging**: JSON to stdout with mandatory fields: `request_id`, `job_id`, `run_id`, `ticket_id`
 
 ## Security Rules
@@ -82,9 +85,14 @@ Dependency direction: `route handler -> service -> repository -> data layer`
 - bcrypt for password hashing, never plaintext in logs/DB/responses
 - Environment variables for all secrets, never in code
 - All API inputs validated (Fastify JSON Schema)
-- PII redacted before sending to OpenAI API
-- Audit log is append-only (no UPDATE/DELETE)
+- PII redacted before sending to OpenAI API (data minimization)
+- LLM generates: compliance status, evidence (field + snippet + offsets), explanation, fix suggestions
+- OCR required for Facebook image content (Tesseract or similar)
+- YouTube connector must extract transcripts when available
+- Audit log is append-only (no UPDATE/DELETE) — must be legally defensible
 - RBAC enforced on every endpoint and every data query
+- CSV export guardrails: max row limit, timeout, HTTP 422 if exceeded, streaming response
+- Credential test endpoint: validate social platform credentials before use
 
 ## Frontend Rules
 

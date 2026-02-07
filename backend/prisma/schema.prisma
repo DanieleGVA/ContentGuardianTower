@@ -1,0 +1,742 @@
+// Content Guardian Tower - Prisma Schema
+// System of Record: PostgreSQL 15
+// Reference: docs/database_schema (1).docx
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Role {
+  ADMIN
+  GLOBAL_MANAGER
+  REGIONAL_MANAGER
+  LOCAL_MANAGER
+  VIEWER
+}
+
+enum Channel {
+  WEB
+  FACEBOOK
+  INSTAGRAM
+  LINKEDIN
+  YOUTUBE
+}
+
+enum ContentType {
+  WEB_PAGE
+  SOCIAL_POST
+  SOCIAL_COMMENT
+  YOUTUBE_VIDEO
+  YOUTUBE_COMMENT
+  YOUTUBE_COMMUNITY_POST
+}
+
+enum ComplianceStatus {
+  COMPLIANT
+  NON_COMPLIANT
+  UNCERTAIN
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  UNCERTAIN_MEDIUM
+}
+
+enum EscalationLevel {
+  LOCAL
+  REGIONAL
+  GLOBAL
+}
+
+enum RuleSeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum SourceType {
+  WEB_OWNED
+  WEB_SEARCH_DISCOVERY
+  SOCIAL_ACCOUNT
+  YOUTUBE_CHANNEL
+}
+
+enum CountryScopeType {
+  ALL
+  LIST
+}
+
+enum SecretStoreType {
+  VAULT
+  KMS
+  FILE
+  ENV
+}
+
+enum CredentialTestStatus {
+  SUCCESS
+  FAILURE
+  NEVER_TESTED
+}
+
+enum ExtractionStatus {
+  OK
+  FAILED
+  PARTIAL
+}
+
+enum RunType {
+  CRAWL
+  SOCIAL_PULL
+  SEARCH_DISCOVERY_REFRESH
+}
+
+enum RunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  PARTIAL
+  CANCELED
+}
+
+enum StepStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum FetchStatus {
+  OK
+  HTTP_4XX
+  HTTP_5XX
+  TIMEOUT
+  PARSE_FAILED
+}
+
+enum TicketEventType {
+  STATUS_CHANGED
+  ASSIGNED
+  UNASSIGNED
+  ESCALATED
+  COMMENT_ADDED
+  ATTACHMENT_ADDED
+  CREATED
+}
+
+enum ActorType {
+  USER
+  SYSTEM
+}
+
+enum AuditEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  LOGOUT
+  USER_CREATED
+  USER_UPDATED
+  USER_PASSWORD_CHANGED
+  SOURCE_CREATED
+  SOURCE_UPDATED
+  SOURCE_DELETED
+  SOURCE_CREDENTIAL_TESTED
+  SOURCE_INGESTION_TRIGGERED
+  RULE_CREATED
+  RULE_UPDATED
+  RULE_VERSION_CREATED
+  RULE_ACTIVATED
+  RULE_DEACTIVATED
+  TICKET_CREATED
+  TICKET_STATUS_CHANGED
+  TICKET_ASSIGNED
+  TICKET_UNASSIGNED
+  TICKET_COMMENT_ADDED
+  TICKET_ATTACHMENT_ADDED
+  ESCALATION_TRIGGERED
+  INGESTION_RUN_STARTED
+  INGESTION_RUN_COMPLETED
+  INGESTION_RUN_FAILED
+  INGESTION_RUN_CANCELLED
+  EXPORT_REQUESTED
+  EXPORT_COMPLETED
+  EXPORT_FAILED
+  SETTINGS_UPDATED
+  RETENTION_RUN
+}
+
+enum AuditEntityType {
+  USER
+  SOURCE
+  RULE
+  RULE_VERSION
+  CONTENT
+  REVISION
+  ANALYSIS
+  TICKET
+  INGESTION_RUN
+  SYSTEM_SETTINGS
+  EXPORT
+}
+
+enum ExportType {
+  TICKETS_CSV
+  AUDIT_CSV
+}
+
+enum ExportStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum StorageType {
+  S3_COMPAT
+  FILESYSTEM
+}
+
+// ============================================================
+// MODELS
+// ============================================================
+
+/// System users with RBAC roles and country scope
+model User {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username         String           @unique
+  email            String           @unique
+  fullName         String           @map("full_name")
+  passwordHash     String           @map("password_hash")
+  role             Role
+  countryScopeType CountryScopeType @default(ALL) @map("country_scope_type")
+  countryCodes     String[]         @default([]) @map("country_codes")
+  isEnabled        Boolean          @default(true) @map("is_enabled")
+  lastLoginAt      DateTime?        @map("last_login_at")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  createdRules         Rule[]             @relation("RuleCreatedBy")
+  updatedRules         Rule[]             @relation("RuleUpdatedBy")
+  createdRuleVersions  RuleVersion[]      @relation("RuleVersionCreatedBy")
+  assignedTickets      Ticket[]           @relation("TicketAssignee")
+  ticketEvents         TicketEvent[]      @relation("TicketEventActor")
+  ticketComments       TicketComment[]
+  ticketAttachments    TicketAttachment[]
+  auditEvents          AuditEvent[]       @relation("AuditEventActor")
+  requestedExports     Export[]
+
+  @@index([role])
+  @@index([isEnabled])
+  @@map("cgt_users")
+}
+
+/// Content sources (web pages, social accounts, YouTube channels)
+model Source {
+  id                    String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform              String
+  channel               Channel
+  countryCode           String     @map("country_code")
+  sourceType            SourceType @map("source_type")
+  identifier            String
+  displayName           String     @map("display_name")
+  isEnabled             Boolean    @default(true) @map("is_enabled")
+  isDeleted             Boolean    @default(false) @map("is_deleted")
+  // Web owned config
+  startUrls             String[]   @default([]) @map("start_urls")
+  domainAllowlist       String[]   @default([]) @map("domain_allowlist")
+  // Web search discovery config
+  keywords              String[]   @default([])
+  languageTargets       String[]   @default([]) @map("language_targets")
+  urlAllowPatterns      String[]   @default([]) @map("url_allow_patterns")
+  urlBlockPatterns      String[]   @default([]) @map("url_block_patterns")
+  // Scheduling
+  crawlFrequencyMinutes Int?       @map("crawl_frequency_minutes")
+  lastRunAt             DateTime?  @map("last_run_at")
+  nextRunAt             DateTime?  @map("next_run_at")
+  // Credential reference
+  credentialRefId       String?    @map("credential_ref_id") @db.Uuid
+  // Timestamps
+  createdAt             DateTime   @default(now()) @map("created_at")
+  updatedAt             DateTime   @updatedAt @map("updated_at")
+  deletedAt             DateTime?  @map("deleted_at")
+
+  // Relations
+  credential     PlatformCredential? @relation(fields: [credentialRefId], references: [id])
+  contentItems   ContentItem[]
+  tickets        Ticket[]
+  ingestionRuns  IngestionRun[]
+  ingestionItems IngestionItem[]
+
+  @@index([channel])
+  @@index([countryCode])
+  @@index([sourceType])
+  @@index([isEnabled])
+  @@index([isDeleted])
+  @@map("cgt_sources")
+}
+
+/// Platform credentials metadata (secrets stored externally)
+model PlatformCredential {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform        Channel
+  secretStoreType SecretStoreType      @map("secret_store_type")
+  secretStoreKey  String               @map("secret_store_key")
+  maskedHint      String?              @map("masked_hint")
+  lastTestStatus  CredentialTestStatus @default(NEVER_TESTED) @map("last_test_status")
+  lastTestedAt    DateTime?            @map("last_tested_at")
+  lastError       String?              @map("last_error")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+
+  // Relations
+  sources Source[]
+
+  @@map("cgt_platform_credentials")
+}
+
+/// Compliance rules (current state header)
+model Rule {
+  id                  String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String
+  type                String
+  severity            RuleSeverity
+  applicableChannels  Channel[]    @map("applicable_channels")
+  applicableCountries String[]     @map("applicable_countries")
+  isActive            Boolean      @default(true) @map("is_active")
+  activeRuleVersionId String?      @map("active_rule_version_id") @db.Uuid
+  createdByUserId     String       @map("created_by_user_id") @db.Uuid
+  updatedByUserId     String       @map("updated_by_user_id") @db.Uuid
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  createdBy        User          @relation("RuleCreatedBy", fields: [createdByUserId], references: [id])
+  updatedBy        User          @relation("RuleUpdatedBy", fields: [updatedByUserId], references: [id])
+  activeVersion    RuleVersion?  @relation("ActiveRuleVersion", fields: [activeRuleVersionId], references: [id])
+  versions         RuleVersion[] @relation("RuleVersions")
+
+  @@index([severity])
+  @@index([isActive])
+  @@map("cgt_rules")
+}
+
+/// Immutable rule version snapshots
+model RuleVersion {
+  id                         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ruleId                     String       @map("rule_id") @db.Uuid
+  version                    Int
+  nameSnapshot               String       @map("name_snapshot")
+  typeSnapshot               String       @map("type_snapshot")
+  severitySnapshot           RuleSeverity @map("severity_snapshot")
+  applicableChannelsSnapshot Channel[]    @map("applicable_channels_snapshot")
+  applicableCountriesSnapshot String[]    @map("applicable_countries_snapshot")
+  payloadSchemaVersion       String?      @map("payload_schema_version")
+  payload                    Json
+  createdAt                  DateTime     @default(now()) @map("created_at")
+  createdByUserId            String       @map("created_by_user_id") @db.Uuid
+
+  // Relations
+  rule      Rule @relation("RuleVersions", fields: [ruleId], references: [id])
+  createdBy User @relation("RuleVersionCreatedBy", fields: [createdByUserId], references: [id])
+  activeFor Rule[] @relation("ActiveRuleVersion")
+
+  @@unique([ruleId, version])
+  @@index([ruleId])
+  @@map("cgt_rule_versions")
+}
+
+/// Logical content entities (web pages, social posts, videos)
+model ContentItem {
+  id                String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  channel           Channel
+  countryCode       String      @map("country_code")
+  sourceId          String      @map("source_id") @db.Uuid
+  contentType       ContentType @map("content_type")
+  externalId        String      @map("external_id")
+  url               String?
+  parentContentId   String?     @map("parent_content_id") @db.Uuid
+  authorHandle      String?     @map("author_handle")
+  publishedAt       DateTime?   @map("published_at")
+  firstSeenAt       DateTime    @default(now()) @map("first_seen_at")
+  lastSeenAt        DateTime    @map("last_seen_at")
+  lastModifiedAt    DateTime?   @map("last_modified_at")
+  currentRevisionId String?     @map("current_revision_id") @db.Uuid
+  isDeleted         Boolean     @default(false) @map("is_deleted")
+  sourceDeleted     Boolean     @default(false) @map("source_deleted")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  source          Source            @relation(fields: [sourceId], references: [id])
+  parentContent   ContentItem?      @relation("ContentParentChild", fields: [parentContentId], references: [id])
+  childContent    ContentItem[]     @relation("ContentParentChild")
+  currentRevision ContentRevision?  @relation("CurrentRevision", fields: [currentRevisionId], references: [id])
+  revisions       ContentRevision[] @relation("ContentRevisions")
+  analysisResults AnalysisResult[]
+  tickets         Ticket[]
+
+  @@unique([sourceId, externalId])
+  @@index([channel])
+  @@index([countryCode])
+  @@index([contentType])
+  @@index([isDeleted])
+  @@index([firstSeenAt])
+  @@index([lastSeenAt])
+  @@map("cgt_content_items")
+}
+
+/// Immutable content revision snapshots
+model ContentRevision {
+  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contentId          String           @map("content_id") @db.Uuid
+  revisionNumber     Int              @map("revision_number")
+  normalizedTextHash String           @map("normalized_text_hash")
+  // Extracted fields
+  title              String?
+  mainText           String?          @map("main_text")
+  caption            String?
+  description        String?
+  tags               String[]         @default([])
+  commentText        String?          @map("comment_text")
+  ocrText            String?          @map("ocr_text")
+  transcript         String?
+  // Extraction status
+  extractionStatus   ExtractionStatus @default(OK) @map("extraction_status")
+  extractionErrors   String[]         @default([]) @map("extraction_errors")
+  // Timestamps
+  firstSeenOrModifiedAt DateTime      @map("first_seen_or_modified_at")
+  createdAt          DateTime         @default(now()) @map("created_at")
+
+  // Relations
+  content         ContentItem      @relation("ContentRevisions", fields: [contentId], references: [id])
+  currentFor      ContentItem[]    @relation("CurrentRevision")
+  analysisResults AnalysisResult[]
+  tickets         Ticket[]
+
+  @@unique([contentId, revisionNumber])
+  @@index([contentId])
+  @@index([normalizedTextHash])
+  @@map("cgt_content_revisions")
+}
+
+/// LLM compliance analysis results (immutable per revision)
+model AnalysisResult {
+  id                     String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contentId              String           @map("content_id") @db.Uuid
+  revisionId             String           @map("revision_id") @db.Uuid
+  // Denormalized for fast queries
+  channel                Channel
+  countryCode            String           @map("country_code")
+  // Language detection
+  languageDetected       String?          @map("language_detected")
+  languageConfidence     Float?           @map("language_confidence")
+  // Compliance result
+  complianceStatus       ComplianceStatus @map("compliance_status")
+  uncertainReason        String?          @map("uncertain_reason")
+  applicableRuleVersionIds String[]       @map("applicable_rule_version_ids") @db.Uuid
+  // Violations stored as JSON (nested structure)
+  violations             Json             @default("[]")
+  // LLM metadata
+  llmProvider            String?          @map("llm_provider")
+  llmModel               String?          @map("llm_model")
+  piiRedactionEnabled    Boolean          @default(true) @map("pii_redaction_enabled")
+  // Performance tracking
+  analysisStartedAt      DateTime?        @map("analysis_started_at")
+  analysisCompletedAt    DateTime?        @map("analysis_completed_at")
+  analysisLatencyMs      Int?             @map("analysis_latency_ms")
+  createdAt              DateTime         @default(now()) @map("created_at")
+
+  // Relations
+  content  ContentItem     @relation(fields: [contentId], references: [id])
+  revision ContentRevision @relation(fields: [revisionId], references: [id])
+  tickets  Ticket[]
+
+  @@unique([revisionId])
+  @@index([contentId])
+  @@index([channel])
+  @@index([countryCode])
+  @@index([complianceStatus])
+  @@map("cgt_analysis_results")
+}
+
+/// Compliance tickets (mutable state)
+model Ticket {
+  id                     String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketKey              String          @unique @map("ticket_key")
+  contentId              String          @map("content_id") @db.Uuid
+  revisionId             String          @map("revision_id") @db.Uuid
+  analysisId             String          @map("analysis_id") @db.Uuid
+  // Denormalized
+  sourceId               String          @map("source_id") @db.Uuid
+  channel                Channel
+  countryCode            String          @map("country_code")
+  // State
+  status                 TicketStatus    @default(OPEN)
+  riskLevel              RiskLevel       @map("risk_level")
+  escalationLevel        EscalationLevel @default(LOCAL) @map("escalation_level")
+  dueAt                  DateTime?       @map("due_at")
+  isOverdue              Boolean         @default(false) @map("is_overdue")
+  // Assignment
+  assigneeUserId         String?         @map("assignee_user_id") @db.Uuid
+  createdBy              String          @map("created_by")
+  // Content
+  title                  String?
+  summary                String?
+  violatedRuleVersionIds String[]        @default([]) @map("violated_rule_version_ids") @db.Uuid
+  uncertainReason        String?         @map("uncertain_reason")
+  contentUrl             String?         @map("content_url")
+  detectedLanguage       String?         @map("detected_language")
+  // Timestamps
+  createdAt              DateTime        @default(now()) @map("created_at")
+  updatedAt              DateTime        @updatedAt @map("updated_at")
+  resolvedAt             DateTime?       @map("resolved_at")
+  closedAt               DateTime?       @map("closed_at")
+
+  // Full-text search vector (managed via migration SQL)
+  // searchVector        Unsupported("tsvector")?
+
+  // Relations
+  content     ContentItem      @relation(fields: [contentId], references: [id])
+  revision    ContentRevision  @relation(fields: [revisionId], references: [id])
+  analysis    AnalysisResult   @relation(fields: [analysisId], references: [id])
+  source      Source           @relation(fields: [sourceId], references: [id])
+  assignee    User?            @relation("TicketAssignee", fields: [assigneeUserId], references: [id])
+  events      TicketEvent[]
+  comments    TicketComment[]
+  attachments TicketAttachment[]
+
+  @@index([status])
+  @@index([riskLevel])
+  @@index([escalationLevel])
+  @@index([countryCode])
+  @@index([channel])
+  @@index([sourceId])
+  @@index([assigneeUserId])
+  @@index([dueAt])
+  @@index([isOverdue])
+  @@index([createdAt])
+  @@map("cgt_tickets")
+}
+
+/// Ticket lifecycle events (append-only history)
+model TicketEvent {
+  id                   String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId             String          @map("ticket_id") @db.Uuid
+  eventType            TicketEventType @map("event_type")
+  actorType            ActorType       @map("actor_type")
+  actorUserId          String?         @map("actor_user_id") @db.Uuid
+  fromStatus           TicketStatus?   @map("from_status")
+  toStatus             TicketStatus?   @map("to_status")
+  fromAssigneeUserId   String?         @map("from_assignee_user_id") @db.Uuid
+  toAssigneeUserId     String?         @map("to_assignee_user_id") @db.Uuid
+  fromEscalationLevel  EscalationLevel? @map("from_escalation_level")
+  toEscalationLevel    EscalationLevel? @map("to_escalation_level")
+  payload              Json?
+  createdAt            DateTime        @default(now()) @map("created_at")
+
+  // Relations
+  ticket Ticket @relation(fields: [ticketId], references: [id])
+  actor  User?  @relation("TicketEventActor", fields: [actorUserId], references: [id])
+
+  @@index([ticketId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@map("cgt_ticket_events")
+}
+
+/// Internal ticket comments
+model TicketComment {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId     String   @map("ticket_id") @db.Uuid
+  authorUserId String   @map("author_user_id") @db.Uuid
+  body         String
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  ticket Ticket @relation(fields: [ticketId], references: [id])
+  author User   @relation(fields: [authorUserId], references: [id])
+
+  @@index([ticketId])
+  @@map("cgt_ticket_comments")
+}
+
+/// Ticket attachment metadata (binary files stored on filesystem)
+model TicketAttachment {
+  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId         String      @map("ticket_id") @db.Uuid
+  uploadedByUserId String      @map("uploaded_by_user_id") @db.Uuid
+  fileName         String      @map("file_name")
+  mimeType         String      @map("mime_type")
+  fileSizeBytes    Int         @map("file_size_bytes")
+  storageType      StorageType @map("storage_type")
+  storageKey       String      @map("storage_key")
+  sha256           String
+  createdAt        DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  ticket     Ticket @relation(fields: [ticketId], references: [id])
+  uploadedBy User   @relation(fields: [uploadedByUserId], references: [id])
+
+  @@index([ticketId])
+  @@map("cgt_ticket_attachments")
+}
+
+/// Ingestion run tracking
+model IngestionRun {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runType               RunType   @map("run_type")
+  sourceId              String?   @map("source_id") @db.Uuid
+  channel               Channel
+  countryCode           String?   @map("country_code")
+  status                RunStatus @default(RUNNING)
+  cancelRequested       Boolean   @default(false) @map("cancel_requested")
+  startedAt             DateTime  @default(now()) @map("started_at")
+  completedAt           DateTime? @map("completed_at")
+  // Metrics
+  itemsFetched          Int       @default(0) @map("items_fetched")
+  itemsFailed           Int       @default(0) @map("items_failed")
+  itemsChanged          Int       @default(0) @map("items_changed")
+  analysisQueued        Int       @default(0) @map("analysis_queued")
+  analysisCompleted     Int       @default(0) @map("analysis_completed")
+  oldestQueueAgeSeconds Int?      @map("oldest_queue_age_seconds")
+  lastError             String?   @map("last_error")
+  // Step tracking as JSON array
+  steps                 Json      @default("[]")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  source         Source?         @relation(fields: [sourceId], references: [id])
+  ingestionItems IngestionItem[]
+
+  @@index([sourceId])
+  @@index([channel])
+  @@index([countryCode])
+  @@index([status])
+  @@index([startedAt])
+  @@map("cgt_ingestion_runs")
+}
+
+/// Individual fetched items within an ingestion run
+model IngestionItem {
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId       String      @map("run_id") @db.Uuid
+  sourceId    String      @map("source_id") @db.Uuid
+  channel     Channel
+  countryCode String      @map("country_code")
+  externalId  String      @map("external_id")
+  url         String?
+  fetchStatus FetchStatus @map("fetch_status")
+  httpStatus  Int?        @map("http_status")
+  retryCount  Int         @default(0) @map("retry_count")
+  nextRetryAt DateTime?   @map("next_retry_at")
+  lastError   String?     @map("last_error")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  run    IngestionRun @relation(fields: [runId], references: [id])
+  source Source       @relation(fields: [sourceId], references: [id])
+
+  @@index([runId])
+  @@index([sourceId])
+  @@index([fetchStatus])
+  @@map("cgt_ingestion_items")
+}
+
+/// Immutable audit events (append-only)
+model AuditEvent {
+  id          String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventType   AuditEventType  @map("event_type")
+  actorType   ActorType       @map("actor_type")
+  actorUserId String?         @map("actor_user_id") @db.Uuid
+  entityType  AuditEntityType @map("entity_type")
+  entityId    String          @map("entity_id")
+  countryCode String?         @map("country_code")
+  channel     Channel?
+  message     String?
+  payload     Json?
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  // Relations
+  actor User? @relation("AuditEventActor", fields: [actorUserId], references: [id])
+
+  @@index([eventType])
+  @@index([actorUserId])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([countryCode])
+  @@index([createdAt])
+  @@map("cgt_audit_events")
+}
+
+/// System-wide configuration (single row)
+model SystemSettings {
+  id                             String    @id @default("default")
+  allowedCountryCodes            String[]  @default([]) @map("allowed_country_codes")
+  languageConfidenceThreshold    Float     @default(0.8) @map("language_confidence_threshold")
+  defaultDueHoursHigh            Int       @default(24) @map("default_due_hours_high")
+  defaultDueHoursMedium          Int       @default(72) @map("default_due_hours_medium")
+  defaultDueDaysLow              Int       @default(7) @map("default_due_days_low")
+  uncertainDefaultRiskLevel      RiskLevel @default(UNCERTAIN_MEDIUM) @map("uncertain_default_risk_level")
+  escalationAfterHours           Int       @default(48) @map("escalation_after_hours")
+  retentionDays                  Int       @default(180) @map("retention_days")
+  piiRedactionEnabledDefault     Boolean   @default(true) @map("pii_redaction_enabled_default")
+  // LLM configuration
+  llmProvider                    String    @default("openai") @map("llm_provider")
+  llmModel                       String    @default("gpt-4o") @map("llm_model")
+  llmMaxTokens                   Int       @default(4096) @map("llm_max_tokens")
+  // Export limits
+  exportMaxRows                  Int       @default(50000) @map("export_max_rows")
+  // Pipeline configuration
+  maxRetriesPerStep              Int       @default(3) @map("max_retries_per_step")
+  defaultScheduleIntervalMinutes Int       @default(1440) @map("default_schedule_interval_minutes")
+  createdAt                      DateTime  @default(now()) @map("created_at")
+  updatedAt                      DateTime  @updatedAt @map("updated_at")
+
+  @@map("cgt_system_settings")
+}
+
+/// Export job tracking
+model Export {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  exportType        ExportType   @map("export_type")
+  requestedByUserId String       @map("requested_by_user_id") @db.Uuid
+  status            ExportStatus @default(QUEUED)
+  filtersSnapshot   Json?        @map("filters_snapshot")
+  rowCount          Int?         @map("row_count")
+  maxRowsEnforced   Int?         @map("max_rows_enforced")
+  storageKey        String?      @map("storage_key")
+  createdAt         DateTime     @default(now()) @map("created_at")
+  completedAt       DateTime?    @map("completed_at")
+  lastError         String?      @map("last_error")
+
+  // Relations
+  requestedBy User @relation(fields: [requestedByUserId], references: [id])
+
+  @@index([requestedByUserId])
+  @@index([status])
+  @@index([exportType])
+  @@map("cgt_exports")
+}

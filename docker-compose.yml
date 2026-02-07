@@ -25,6 +25,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: dev
     container_name: cgt-backend
     environment:
       - NODE_ENV=development
@@ -47,6 +48,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - cgt-network
     restart: unless-stopped
@@ -59,6 +66,7 @@ services:
     container_name: cgt-frontend
     environment:
       - VITE_API_URL=http://localhost:3000
+      - API_PROXY_TARGET=http://backend:3000
     ports:
       - "5173:5173"
     volumes:

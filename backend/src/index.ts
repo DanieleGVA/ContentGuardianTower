@@ -1,0 +1,110 @@
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import jwt from '@fastify/jwt';
+import rateLimit from '@fastify/rate-limit';
+import sensible from '@fastify/sensible';
+import { PrismaClient } from '@prisma/client';
+import PgBoss from 'pg-boss';
+
+const prisma = new PrismaClient();
+
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.error('DATABASE_URL environment variable is required');
+  process.exit(1);
+}
+
+async function buildApp() {
+  const app = Fastify({
+    logger: {
+      level: process.env.LOG_LEVEL || 'info',
+      transport:
+        process.env.NODE_ENV === 'development'
+          ? { target: 'pino-pretty' }
+          : undefined,
+    },
+  });
+
+  // Plugins
+  await app.register(cors, {
+    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  });
+  await app.register(helmet);
+  await app.register(sensible);
+  await app.register(jwt, {
+    secret: process.env.JWT_SECRET || 'change_me_in_production',
+    sign: { expiresIn: '24h' },
+  });
+  await app.register(rateLimit, {
+    max: 100,
+    timeWindow: '1 minute',
+  });
+
+  // Decorate with shared instances
+  app.decorate('prisma', prisma);
+
+  // Health check - matches OpenAPI HealthResponse schema
+  app.get('/health', async () => {
+    let dbConnected = false;
+    let dbLatencyMs: number | undefined;
+    try {
+      const start = performance.now();
+      await prisma.$queryRaw`SELECT 1`;
+      dbLatencyMs = Math.round((performance.now() - start) * 10) / 10;
+      dbConnected = true;
+    } catch {
+      // database unreachable
+    }
+    return {
+      status: dbConnected ? 'ok' : 'degraded',
+      timestamp: new Date().toISOString(),
+      database: {
+        connected: dbConnected,
+        ...(dbLatencyMs !== undefined && { latencyMs: dbLatencyMs }),
+      },
+    };
+  });
+
+  return app;
+}
+
+async function startWorker() {
+  const boss = new PgBoss(DATABASE_URL!);
+
+  boss.on('error', (error) => {
+    console.error('pgboss error:', error);
+  });
+
+  await boss.start();
+  console.log('pgboss worker started');
+
+  return boss;
+}
+
+async function main() {
+  const app = await buildApp();
+  const boss = await startWorker();
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    console.log('Shutting down...');
+    await boss.stop();
+    await app.close();
+    await prisma.$disconnect();
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
+  try {
+    const port = parseInt(process.env.PORT || '3000', 10);
+    await app.listen({ port, host: '0.0.0.0' });
+  } catch (err) {
+    app.log.error(err);
+    process.exit(1);
+  }
+}
+
+main();

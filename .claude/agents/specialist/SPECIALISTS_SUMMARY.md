@@ -4,8 +4,8 @@
 
 ### CGT-005: API Engineer
 - **Focus**: REST API implementation, RBAC enforcement, authentication
-- **Deliverables**: Complete API Server with all CRUD endpoints, CSV export, audit log API
-- **Key Skills**: Fastify 5, TypeScript, bcrypt/JWT, RBAC middleware, input validation, OpenAPI/Swagger docs
+- **Deliverables**: Complete API Server with all CRUD endpoints, CSV export (with row limit + HTTP 422 guardrail), audit log API, credential test endpoint, manual ingestion trigger endpoint
+- **Key Skills**: Fastify 5, TypeScript, bcrypt/JWT, RBAC middleware, input validation, OpenAPI/Swagger docs, CSV streaming
 - **Reports to**: CGT-003 (Backend Lead)
 - **Parallel**: Works with Pipeline Engineer, Data Engineer
 
@@ -25,15 +25,15 @@
 
 ### CGT-008: AI/NLP Engineer
 - **Focus**: LLM integration, prompt engineering, compliance analysis
-- **Deliverables**: Compliance prompt templates, evidence extraction, PII redaction, language detection
-- **Key Skills**: LLM prompt engineering, NLP, OCR integration, data minimization
+- **Deliverables**: Compliance prompt templates, evidence extraction (field + snippet + offsets), fix suggestion generation, PII redaction, language detection, OCR for Facebook images
+- **Key Skills**: LLM prompt engineering, NLP, OCR (Tesseract), data minimization, evidence structuring
 - **Reports to**: CGT-003 (Backend Lead)
 - **Parallel**: Collaborates with Compliance Specialist (SP-4)
 
 ### CGT-009: Integration Engineer
 - **Focus**: Channel connectors (Web, Facebook, Instagram, LinkedIn, YouTube)
-- **Deliverables**: All 5 channel connectors, credential management, rate limiting
-- **Key Skills**: Web scraping, social media APIs, normalization, hashing, throttling
+- **Deliverables**: All 5 channel connectors (incl. YouTube transcript extraction), credential management with test endpoint, rate limiting, parent/child content model for social
+- **Key Skills**: Web scraping, social media APIs, YouTube Data API, normalization, hashing, throttling, credential validation
 - **Reports to**: CGT-003 (Backend Lead)
 - **Parallel**: Builds Web and Social connectors concurrently, feeds Pipeline Engineer
 
