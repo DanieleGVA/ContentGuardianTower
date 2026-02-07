@@ -75,7 +75,7 @@ export const SCHEDULER_LOCKS = {
 } as const;
 
 // Content key generation
-export function generateContentKey(normalizedText: string, canonicalUrl: string): string {
+export function generateContentKey(_normalizedText: string, _canonicalUrl: string): string {
   // Implementation will use crypto.createHash('sha256')
   // content_key = sha256(normalized_text + canonical_url)
   throw new Error('Not implemented - use crypto.createHash');

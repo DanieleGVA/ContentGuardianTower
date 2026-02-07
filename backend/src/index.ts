@@ -6,8 +6,19 @@ import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import { PrismaClient } from '@prisma/client';
 import PgBoss from 'pg-boss';
+import authPlugin from './api/plugins/auth.plugin.js';
+import errorHandlerPlugin from './api/plugins/error-handler.plugin.js';
+import { registerRoutes } from './api/routes/index.js';
 
 const prisma = new PrismaClient();
+
+// Augment Fastify with shared decorators
+declare module 'fastify' {
+  interface FastifyInstance {
+    prisma: PrismaClient;
+    authenticate: (request: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => Promise<void>;
+  }
+}
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
@@ -43,6 +54,13 @@ async function buildApp() {
 
   // Decorate with shared instances
   app.decorate('prisma', prisma);
+
+  // Error handler & auth
+  await app.register(errorHandlerPlugin);
+  await app.register(authPlugin);
+
+  // Register API routes
+  await registerRoutes(app);
 
   // Health check - matches OpenAPI HealthResponse schema
   app.get('/health', async () => {

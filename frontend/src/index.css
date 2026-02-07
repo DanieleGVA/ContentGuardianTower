@@ -1,0 +1,54 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/forms";
+
+@theme {
+  /* Brand */
+  --color-primary: #2563EB;
+  --color-primary-hover: #1D4ED8;
+  --color-primary-light: #DBEAFE;
+
+  /* Status - compliance */
+  --color-compliant: #059669;
+  --color-non-compliant: #DC2626;
+  --color-uncertain: #D97706;
+  --color-processing: #6B7280;
+
+  /* Ticket status */
+  --color-status-open: #3B82F6;
+  --color-status-in-progress: #F59E0B;
+  --color-status-resolved: #10B981;
+  --color-status-closed: #6B7280;
+
+  /* Risk */
+  --color-risk-high: #DC2626;
+  --color-risk-medium: #F59E0B;
+  --color-risk-low: #10B981;
+  --color-risk-uncertain: #8B5CF6;
+
+  /* Escalation */
+  --color-escalation-regional: #F59E0B;
+  --color-escalation-global: #DC2626;
+
+  /* Surface */
+  --color-page-bg: #F9FAFB;
+  --color-card-bg: #FFFFFF;
+  --color-sidebar-bg: #111827;
+  --color-sidebar-text: #F9FAFB;
+  --color-sidebar-active: #2563EB;
+  --color-border: #E5E7EB;
+  --color-text-primary: #111827;
+  --color-text-secondary: #6B7280;
+  --color-text-muted: #9CA3AF;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Base styles */
+body {
+  @apply bg-page-bg text-text-primary font-sans text-sm antialiased;
+}
+
+/* Focus styles for accessibility */
+*:focus-visible {
+  @apply outline-2 outline-offset-2 outline-primary;
+}
