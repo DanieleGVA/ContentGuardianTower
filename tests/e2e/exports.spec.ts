@@ -1,21 +1,10 @@
-import { test, expect, type Page } from '@playwright/test';
-
-async function loginAsAdmin(page: Page) {
-  await page.goto('/login');
-  await page.getByPlaceholder('Enter your username').fill('admin');
-  await page.getByPlaceholder('Enter your password').fill('admin123');
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await page.waitForURL('**/dashboard');
-}
+import { test, expect } from '@playwright/test';
+import { getStoredAdminToken } from './helpers.js';
 
 test.describe('Exports', () => {
-  test.beforeEach(async ({ page }) => {
-    await loginAsAdmin(page);
-  });
-
   test('shows exports page', async ({ page }) => {
     await page.goto('/exports');
-    await expect(page.getByText('Exports')).toBeVisible();
+    await expect(page.locator('main').getByRole('heading', { name: 'Exports' })).toBeVisible();
   });
 
   test('exports page loads without errors', async ({ page }) => {
@@ -26,14 +15,8 @@ test.describe('Exports', () => {
   });
 
   test('can trigger an export via API', async ({ request }) => {
-    // Login via API to get token
-    const loginRes = await request.post('http://localhost:3000/api/auth/login', {
-      data: { username: 'admin', password: 'admin123' },
-    });
-    expect(loginRes.ok()).toBeTruthy();
-    const { token } = await loginRes.json();
+    const token = getStoredAdminToken();
 
-    // Trigger export
     const exportRes = await request.post('http://localhost:3000/api/exports', {
       headers: { authorization: `Bearer ${token}` },
       data: { exportType: 'TICKETS_CSV' },
@@ -46,10 +29,7 @@ test.describe('Exports', () => {
   });
 
   test('can check export status via API', async ({ request }) => {
-    const loginRes = await request.post('http://localhost:3000/api/auth/login', {
-      data: { username: 'admin', password: 'admin123' },
-    });
-    const { token } = await loginRes.json();
+    const token = getStoredAdminToken();
 
     const listRes = await request.get('http://localhost:3000/api/exports', {
       headers: { authorization: `Bearer ${token}` },

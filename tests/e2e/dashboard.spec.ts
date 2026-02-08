@@ -1,28 +1,18 @@
-import { test, expect, type Page } from '@playwright/test';
-
-const API_URL = 'http://localhost:3000';
-
-async function loginAsAdmin(page: Page) {
-  await page.goto('/login');
-  await page.getByPlaceholder('Enter your username').fill('admin');
-  await page.getByPlaceholder('Enter your password').fill('admin123');
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await page.waitForURL('**/dashboard');
-}
+import { test, expect } from '@playwright/test';
 
 test.describe('Dashboard', () => {
   test.beforeEach(async ({ page }) => {
-    await loginAsAdmin(page);
+    await page.goto('/dashboard');
   });
 
   test('shows dashboard page with KPI sections', async ({ page }) => {
     await expect(page).toHaveURL(/\/dashboard/);
 
-    // Status KPI cards should be visible
-    await expect(page.getByText('Open')).toBeVisible();
-    await expect(page.getByText('In Progress')).toBeVisible();
-    await expect(page.getByText('Resolved')).toBeVisible();
-    await expect(page.getByText('Closed')).toBeVisible();
+    // Status KPI cards should be visible (use first() to avoid strict mode on repeated text)
+    await expect(page.getByText('Open').first()).toBeVisible();
+    await expect(page.getByText('In Progress').first()).toBeVisible();
+    await expect(page.getByText('Resolved').first()).toBeVisible();
+    await expect(page.getByText('Closed').first()).toBeVisible();
   });
 
   test('shows risk level KPI cards', async ({ page }) => {

@@ -29,6 +29,9 @@ export interface SelectProps {
   name?: string;
 }
 
+// Radix Select does not allow empty string values. Map them to a sentinel.
+const EMPTY_SENTINEL = '__empty__';
+
 export function Select({
   label,
   error,
@@ -44,6 +47,15 @@ export function Select({
   const triggerId = `${autoId}-trigger`;
   const errorId = error ? `${autoId}-error` : undefined;
 
+  const safeOptions = options.map((opt) => ({
+    ...opt,
+    value: opt.value === '' ? EMPTY_SENTINEL : opt.value,
+  }));
+  const safeValue = value === '' ? undefined : value;
+  const handleChange = (val: string) => {
+    onValueChange?.(val === EMPTY_SENTINEL ? '' : val);
+  };
+
   return (
     <div className="flex flex-col gap-1.5">
       {label && (
@@ -56,8 +68,8 @@ export function Select({
       )}
 
       <SelectPrimitive.Root
-        value={value}
-        onValueChange={onValueChange}
+        value={safeValue}
+        onValueChange={handleChange}
         disabled={disabled}
         name={name}
       >
@@ -95,7 +107,7 @@ export function Select({
             )}
           >
             <SelectPrimitive.Viewport className="p-1">
-              {options.map((opt) => (
+              {safeOptions.map((opt) => (
                 <SelectPrimitive.Item
                   key={opt.value}
                   value={opt.value}

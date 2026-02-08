@@ -8,7 +8,7 @@ test.describe('Login Flow', () => {
   });
 
   test('shows login form', async ({ page }) => {
-    await expect(page.getByText('Content Guardian Tower')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Content Guardian Tower' })).toBeVisible();
     await expect(page.getByPlaceholder('Enter your username')).toBeVisible();
     await expect(page.getByPlaceholder('Enter your password')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();

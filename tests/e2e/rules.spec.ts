@@ -1,21 +1,9 @@
-import { test, expect, type Page } from '@playwright/test';
-
-async function loginAsAdmin(page: Page) {
-  await page.goto('/login');
-  await page.getByPlaceholder('Enter your username').fill('admin');
-  await page.getByPlaceholder('Enter your password').fill('admin123');
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await page.waitForURL('**/dashboard');
-}
+import { test, expect } from '@playwright/test';
 
 test.describe('Rules', () => {
-  test.beforeEach(async ({ page }) => {
-    await loginAsAdmin(page);
-  });
-
   test('shows rules list page', async ({ page }) => {
     await page.goto('/rules');
-    await expect(page.getByText('Rules')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Rules' }).first()).toBeVisible();
   });
 
   test('can navigate to create rule form', async ({ page }) => {

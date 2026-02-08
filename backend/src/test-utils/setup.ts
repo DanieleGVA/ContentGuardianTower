@@ -31,7 +31,13 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; prisma: Pr
     secret: process.env.JWT_SECRET || 'test-jwt-secret',
     sign: { expiresIn: '24h' },
   });
-  await app.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+  // Rate limiting: use unique key per request in tests to avoid 429 on repeated logins
+  let reqCounter = 0;
+  await app.register(rateLimit, {
+    max: 1000,
+    timeWindow: '1 minute',
+    keyGenerator: () => `test-${++reqCounter}`,
+  });
 
   app.decorate('prisma', prisma);
 
