@@ -5,7 +5,12 @@ export function useFilters<T extends Record<string, string>>(defaults?: Partial<
   const [searchParams, setSearchParams] = useSearchParams();
 
   const filters = useMemo(() => {
-    const result: Record<string, string> = { ...defaults };
+    const result: Record<string, string> = {};
+    if (defaults) {
+      for (const [k, v] of Object.entries(defaults)) {
+        if (v !== undefined) result[k] = v;
+      }
+    }
     for (const [key, value] of searchParams.entries()) {
       result[key] = value;
     }

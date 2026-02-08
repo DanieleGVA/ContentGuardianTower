@@ -6,7 +6,7 @@
     "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true,
+    "composite": true,
     "isolatedModules": true,
     "allowImportingTsExtensions": true
   },

@@ -9,6 +9,8 @@ import PgBoss from 'pg-boss';
 import authPlugin from './api/plugins/auth.plugin.js';
 import errorHandlerPlugin from './api/plugins/error-handler.plugin.js';
 import { registerRoutes } from './api/routes/index.js';
+import { registerWorkerHandlers } from './worker/index.js';
+import { startScheduler } from './worker/scheduler/index.js';
 
 const prisma = new PrismaClient();
 
@@ -97,6 +99,9 @@ async function startWorker() {
   await boss.start();
   console.log('pgboss worker started');
 
+  // Register job handlers
+  registerWorkerHandlers(boss, prisma);
+
   return boss;
 }
 
@@ -104,9 +109,13 @@ async function main() {
   const app = await buildApp();
   const boss = await startWorker();
 
+  // Start scheduler
+  const schedulerInterval = startScheduler(prisma, boss);
+
   // Graceful shutdown
   const shutdown = async () => {
     console.log('Shutting down...');
+    clearInterval(schedulerInterval);
     await boss.stop();
     await app.close();
     await prisma.$disconnect();

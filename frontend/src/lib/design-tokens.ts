@@ -1,5 +1,3 @@
-import type { ReactNode } from 'react';
-
 // Ticket status
 export const TICKET_STATUS = {
   OPEN: { label: 'Open', color: 'text-status-open', bg: 'bg-status-open/10', icon: '○' },
