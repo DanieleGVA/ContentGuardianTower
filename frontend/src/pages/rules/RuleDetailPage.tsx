@@ -7,16 +7,17 @@ import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Skeleton } from '../../components/ui/Skeleton';
 import { useAuth } from '../../hooks/useAuth';
+import { useToast } from '../../components/ui/Toast';
 import { api } from '../../lib/api-client';
 import { CHANNEL_ICON } from '../../lib/design-tokens';
 
 interface RuleVersion {
   id: string;
-  versionNumber: number;
+  version: number;
   isActive: boolean;
   payload: Record<string, unknown>;
   createdAt: string;
-  createdBy: string;
+  createdBy: { id: string; username: string; fullName: string };
 }
 
 interface Rule {
@@ -27,10 +28,13 @@ interface Rule {
   isActive: boolean;
   applicableChannels: string[];
   applicableCountries: string[];
-  versions: RuleVersion[];
+  activeVersion: { id: string; version: number; payload: unknown } | null;
+  createdBy: { id: string; username: string; fullName: string };
+  updatedBy: { id: string; username: string; fullName: string } | null;
   createdAt: string;
   updatedAt: string;
 }
+
 
 const SEVERITY_STYLES: Record<string, string> = {
   HIGH: 'bg-red-100 text-red-700',
@@ -60,9 +64,11 @@ export function RuleDetailPage() {
   const { user } = useAuth();
 
   const [rule, setRule] = useState<Rule | null>(null);
+  const [versions, setVersions] = useState<RuleVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
+  const { toast } = useToast();
 
   const isAdmin = user?.role === 'ADMIN';
 
@@ -71,8 +77,12 @@ export function RuleDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<Rule>(`/v1/rules/${id}`);
-      setRule(res);
+      const [ruleRes, versionsRes] = await Promise.all([
+        api.get<Rule>(`/rules/${id}`),
+        api.get<RuleVersion[]>(`/rules/${id}/versions`),
+      ]);
+      setRule(ruleRes);
+      setVersions(versionsRes);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load rule.');
     } finally {
@@ -88,10 +98,17 @@ export function RuleDetailPage() {
     if (!id || !rule) return;
     setToggling(true);
     try {
-      await api.put(`/v1/rules/${id}`, { isActive: !rule.isActive });
+      if (rule.isActive) {
+        await api.post(`/rules/${id}/deactivate`);
+        toast({ title: 'Rule deactivated', variant: 'success' });
+      } else {
+        await api.post(`/rules/${id}/activate`);
+        toast({ title: 'Rule activated', variant: 'success' });
+      }
       fetchRule();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update rule.');
+      const msg = err instanceof Error ? err.message : 'Failed to update rule.';
+      toast({ title: 'Failed to update rule', description: msg, variant: 'error' });
     } finally {
       setToggling(false);
     }
@@ -224,7 +241,7 @@ export function RuleDetailPage() {
             {/* Versions */}
             <Card>
               <h2 className="text-lg font-semibold text-text-primary">Versions</h2>
-              {rule.versions && rule.versions.length > 0 ? (
+              {versions.length > 0 ? (
                 <div className="mt-4 overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -244,19 +261,19 @@ export function RuleDetailPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {rule.versions.map((version) => (
+                      {versions.map((version) => (
                         <tr
                           key={version.id}
                           className="border-b border-border last:border-b-0 hover:bg-gray-50 transition-colors"
                         >
                           <td className="px-4 py-3 font-medium text-text-primary">
-                            v{version.versionNumber}
+                            v{version.version}
                           </td>
                           <td className="px-4 py-3 text-text-secondary">
                             {formatDate(version.createdAt)}
                           </td>
                           <td className="px-4 py-3 text-text-secondary">
-                            {version.createdBy}
+                            {version.createdBy?.fullName ?? '--'}
                           </td>
                           <td className="px-4 py-3">
                             {version.isActive ? (

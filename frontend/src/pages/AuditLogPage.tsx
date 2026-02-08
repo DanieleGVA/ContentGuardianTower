@@ -13,22 +13,22 @@ import { api } from '../lib/api-client';
 
 interface AuditLogEntry {
   id: string;
-  timestamp: string;
   eventType: string;
-  actorId: string | null;
-  actorUsername: string | null;
-  entityType: string | null;
-  entityId: string | null;
-  message: string;
+  actorType: string;
+  actorUserId: string | null;
+  entityType: string;
+  entityId: string;
+  countryCode: string | null;
+  channel: string | null;
+  message: string | null;
   payload: Record<string, unknown> | null;
+  createdAt: string;
+  actor: { id: string; username: string; fullName: string } | null;
 }
 
 interface AuditLogResponse {
   data: AuditLogEntry[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
+  meta: { total: number; page: number; pageSize: number; totalPages: number };
 }
 
 const EVENT_TYPE_OPTIONS = [
@@ -99,10 +99,10 @@ export function AuditLogPage() {
       if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
       if (filters.dateTo) params.set('dateTo', filters.dateTo);
 
-      const res = await api.get<AuditLogResponse>(`/v1/audit-logs?${params.toString()}`);
+      const res = await api.get<AuditLogResponse>(`/audit-events?${params.toString()}`);
       setData(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
+      setTotal(res.meta.total);
+      setTotalPages(res.meta.totalPages);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load audit logs.');
     } finally {
@@ -263,7 +263,7 @@ export function AuditLogPage() {
                       onClick={() => toggleExpand(entry.id)}
                     >
                       <td className="whitespace-nowrap px-3 py-2 text-xs text-text-secondary">
-                        {formatTimestamp(entry.timestamp)}
+                        {formatTimestamp(entry.createdAt)}
                       </td>
                       <td className="px-3 py-2">
                         <Badge
@@ -273,16 +273,16 @@ export function AuditLogPage() {
                         />
                       </td>
                       <td className="px-3 py-2 text-xs text-text-primary">
-                        {entry.actorUsername ?? '--'}
+                        {entry.actor?.username ?? '--'}
                       </td>
                       <td className="px-3 py-2 text-xs text-text-secondary">
-                        {entry.entityType ?? '--'}
+                        {entry.entityType}
                       </td>
                       <td className="px-3 py-2 font-mono text-xs text-text-muted">
                         {shortId(entry.entityId)}
                       </td>
-                      <td className="max-w-xs truncate px-3 py-2 text-xs text-text-primary" title={entry.message}>
-                        {entry.message}
+                      <td className="max-w-xs truncate px-3 py-2 text-xs text-text-primary" title={entry.message ?? undefined}>
+                        {entry.message ?? '--'}
                       </td>
                     </tr>
                     {/* Expanded payload row */}

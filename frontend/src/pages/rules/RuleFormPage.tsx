@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Skeleton } from '../../components/ui/Skeleton';
+import { useToast } from '../../components/ui/Toast';
 import { api, ApiClientError } from '../../lib/api-client';
 
 interface RuleFormData {
@@ -53,12 +54,13 @@ export function RuleFormPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const { toast } = useToast();
 
   const fetchRule = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     try {
-      const res = await api.get<Record<string, unknown>>(`/v1/rules/${id}`);
+      const res = await api.get<Record<string, unknown>>(`/rules/${id}`);
       setForm({
         name: String(res.name ?? ''),
         type: String(res.type ?? ''),
@@ -105,6 +107,8 @@ export function RuleFormPage() {
     if (!form.name.trim()) errors.name = 'Name is required.';
     if (!form.type) errors.type = 'Type is required.';
     if (!form.severity) errors.severity = 'Severity is required.';
+    if (form.applicableChannels.length === 0) errors.applicableChannels = 'Select at least one channel.';
+    if (!form.applicableCountries.trim()) errors.applicableCountries = 'Enter at least one country code.';
     if (form.payload.trim()) {
       try {
         JSON.parse(form.payload);
@@ -136,10 +140,12 @@ export function RuleFormPage() {
 
     try {
       if (isEdit) {
-        await api.put(`/v1/rules/${id}`, payload);
+        await api.put(`/rules/${id}`, payload);
+        toast({ title: 'Rule updated', variant: 'success' });
         navigate(`/rules/${id}`);
       } else {
-        const res = await api.post<{ id: string }>('/v1/rules', payload);
+        const res = await api.post<{ id: string }>('/rules', payload);
+        toast({ title: 'Rule created', variant: 'success' });
         navigate(`/rules/${res.id}`);
       }
     } catch (err) {
@@ -148,6 +154,7 @@ export function RuleFormPage() {
       } else {
         setError(err instanceof Error ? err.message : 'Failed to save rule.');
       }
+      toast({ title: 'Failed to save rule', variant: 'error' });
     } finally {
       setSaving(false);
     }

@@ -28,19 +28,18 @@ interface RunItem {
 
 interface IngestionRunDetail {
   id: string;
-  sourceId: string;
-  sourceName: string;
+  sourceId: string | null;
   channel: string;
   status: string;
   itemsFetched: number;
   itemsChanged: number;
   itemsFailed: number;
-  durationMs: number | null;
   startedAt: string;
-  finishedAt: string | null;
-  pipelineSteps: PipelineStep[];
-  items: RunItem[];
+  completedAt: string | null;
+  steps: PipelineStep[];
+  ingestionItems: RunItem[];
   createdAt: string;
+  source: { id: string; displayName: string; channel: string; countryCode: string } | null;
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -82,16 +81,6 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-function formatDuration(ms: number | null): string {
-  if (ms === null || ms === undefined) return '--';
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}m ${remainingSeconds}s`;
-}
-
 function shortId(id: string): string {
   return id.substring(0, 8);
 }
@@ -108,7 +97,7 @@ export function IngestionRunDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<IngestionRunDetail>(`/v1/ingestion-runs/${id}`);
+      const res = await api.get<IngestionRunDetail>(`/ingestion-runs/${id}`);
       setRun(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load ingestion run.');
@@ -122,9 +111,10 @@ export function IngestionRunDetailPage() {
   }, [fetchRun]);
 
   // Build ordered steps list from API data
+  const stepsArray = Array.isArray(run?.steps) ? (run.steps as PipelineStep[]) : [];
   const orderedSteps = run
     ? PIPELINE_STEPS_ORDER.map((stepName) => {
-        const existing = run.pipelineSteps?.find((s) => s.name === stepName);
+        const existing = stepsArray.find((s) => s.name === stepName);
         return existing ?? { name: stepName, status: 'PENDING', startedAt: null, finishedAt: null, error: null };
       })
     : [];
@@ -228,7 +218,7 @@ export function IngestionRunDetailPage() {
                   </div>
                   <div className="mt-1 flex items-center gap-2 text-sm text-text-secondary">
                     <span>{CHANNEL_ICON[run.channel] ?? ''}</span>
-                    <span>{run.sourceName}</span>
+                    <span>{run.source?.displayName ?? '--'}</span>
                     <span aria-hidden="true">·</span>
                     <span>{run.channel}</span>
                   </div>
@@ -252,16 +242,16 @@ export function IngestionRunDetailPage() {
                   </dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-medium uppercase text-text-muted">Duration</dt>
-                  <dd className="mt-1 text-lg font-semibold text-text-primary">{formatDuration(run.durationMs)}</dd>
-                </div>
-                <div>
                   <dt className="text-xs font-medium uppercase text-text-muted">Started</dt>
                   <dd className="mt-1 text-sm text-text-primary">{formatDate(run.startedAt)}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-medium uppercase text-text-muted">Finished</dt>
-                  <dd className="mt-1 text-sm text-text-primary">{formatDate(run.finishedAt)}</dd>
+                  <dt className="text-xs font-medium uppercase text-text-muted">Completed</dt>
+                  <dd className="mt-1 text-sm text-text-primary">{formatDate(run.completedAt)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase text-text-muted">Country</dt>
+                  <dd className="mt-1 text-sm text-text-primary">{run.source?.countryCode ?? '--'}</dd>
                 </div>
               </div>
             </Card>
@@ -325,14 +315,14 @@ export function IngestionRunDetailPage() {
             </Card>
 
             {/* Items table */}
-            {run.items && run.items.length > 0 && (
+            {run.ingestionItems && run.ingestionItems.length > 0 && (
               <Card>
                 <h2 className="mb-4 text-lg font-semibold text-text-primary">
-                  Items ({run.items.length})
+                  Items ({run.ingestionItems.length})
                 </h2>
                 <DataTable
                   columns={itemColumns}
-                  data={run.items}
+                  data={run.ingestionItems}
                   emptyMessage="No items in this run."
                   rowKey={(row) => row.id}
                 />

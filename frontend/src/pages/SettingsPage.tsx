@@ -5,29 +5,36 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
 import { Skeleton } from '../components/ui/Skeleton';
+import { useToast } from '../components/ui/Toast';
 import { api, ApiClientError } from '../lib/api-client';
 
 interface SystemSettings {
+  id: string;
   // Thresholds & SLA
   defaultDueHoursHigh: number;
   defaultDueHoursMedium: number;
-  defaultDueHoursLow: number;
-  autoEscalationHours: number;
-  confidenceThreshold: number;
+  defaultDueDaysLow: number;
+  escalationAfterHours: number;
+  languageConfidenceThreshold: number;
 
   // LLM Configuration
   llmProvider: string;
   llmModel: string;
-  llmTemperature: number;
   llmMaxTokens: number;
 
   // Export Limits
   exportMaxRows: number;
-  exportTimeoutSeconds: number;
 
   // Data Retention
-  retentionMonths: number;
-  auditRetentionMonths: number;
+  retentionDays: number;
+
+  // Pipeline
+  maxRetriesPerStep: number;
+  defaultScheduleIntervalMinutes: number;
+
+  // Other
+  allowedCountryCodes: string[];
+  piiRedactionEnabledDefault: boolean;
 }
 
 const LLM_PROVIDER_OPTIONS = [
@@ -43,19 +50,21 @@ const LLM_MODEL_OPTIONS = [
 ];
 
 const DEFAULT_SETTINGS: SystemSettings = {
-  defaultDueHoursHigh: 4,
-  defaultDueHoursMedium: 24,
-  defaultDueHoursLow: 72,
-  autoEscalationHours: 48,
-  confidenceThreshold: 0.7,
+  id: 'default',
+  defaultDueHoursHigh: 24,
+  defaultDueHoursMedium: 72,
+  defaultDueDaysLow: 7,
+  escalationAfterHours: 48,
+  languageConfidenceThreshold: 0.8,
   llmProvider: 'openai',
   llmModel: 'gpt-4o',
-  llmTemperature: 0.1,
   llmMaxTokens: 4096,
-  exportMaxRows: 10000,
-  exportTimeoutSeconds: 120,
-  retentionMonths: 6,
-  auditRetentionMonths: 12,
+  exportMaxRows: 50000,
+  retentionDays: 180,
+  maxRetriesPerStep: 3,
+  defaultScheduleIntervalMinutes: 1440,
+  allowedCountryCodes: [],
+  piiRedactionEnabledDefault: true,
 };
 
 export function SettingsPage() {
@@ -64,12 +73,13 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const { toast } = useToast();
 
   const fetchSettings = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<SystemSettings>('/v1/settings');
+      const res = await api.get<SystemSettings>('/settings');
       setSettings(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load settings.');
@@ -94,14 +104,16 @@ export function SettingsPage() {
     setSuccess(false);
 
     try {
-      await api.put('/v1/settings', settings);
+      await api.put('/settings', settings);
       setSuccess(true);
+      toast({ title: 'Settings saved', variant: 'success' });
     } catch (err) {
       if (err instanceof ApiClientError) {
         setError(err.body?.message ?? 'Failed to save settings.');
       } else {
         setError(err instanceof Error ? err.message : 'Failed to save settings.');
       }
+      toast({ title: 'Failed to save settings', variant: 'error' });
     } finally {
       setSaving(false);
     }
@@ -175,30 +187,30 @@ export function SettingsPage() {
                   helpText="Hours before a MEDIUM risk ticket is due."
                 />
                 <Input
-                  label="Due Hours (Low Risk)"
+                  label="Due Days (Low Risk)"
                   type="number"
                   min={1}
-                  value={String(settings.defaultDueHoursLow)}
-                  onChange={(e) => updateField('defaultDueHoursLow', parseInt(e.target.value, 10) || 1)}
-                  helpText="Hours before a LOW risk ticket is due."
+                  value={String(settings.defaultDueDaysLow)}
+                  onChange={(e) => updateField('defaultDueDaysLow', parseInt(e.target.value, 10) || 1)}
+                  helpText="Days before a LOW risk ticket is due."
                 />
                 <Input
                   label="Auto-Escalation (Hours)"
                   type="number"
                   min={1}
-                  value={String(settings.autoEscalationHours)}
-                  onChange={(e) => updateField('autoEscalationHours', parseInt(e.target.value, 10) || 1)}
+                  value={String(settings.escalationAfterHours)}
+                  onChange={(e) => updateField('escalationAfterHours', parseInt(e.target.value, 10) || 1)}
                   helpText="Hours of inactivity before ticket auto-escalation."
                 />
                 <Input
-                  label="Confidence Threshold"
+                  label="Language Confidence Threshold"
                   type="number"
                   min={0}
                   max={1}
                   step={0.05}
-                  value={String(settings.confidenceThreshold)}
-                  onChange={(e) => updateField('confidenceThreshold', parseFloat(e.target.value) || 0)}
-                  helpText="LLM confidence threshold (0-1) for compliance decisions."
+                  value={String(settings.languageConfidenceThreshold)}
+                  onChange={(e) => updateField('languageConfidenceThreshold', parseFloat(e.target.value) || 0)}
+                  helpText="Language detection confidence threshold (0-1)."
                 />
               </div>
             </Card>
@@ -220,16 +232,6 @@ export function SettingsPage() {
                   onValueChange={(v) => updateField('llmModel', v)}
                 />
                 <Input
-                  label="Temperature"
-                  type="number"
-                  min={0}
-                  max={2}
-                  step={0.1}
-                  value={String(settings.llmTemperature)}
-                  onChange={(e) => updateField('llmTemperature', parseFloat(e.target.value) || 0)}
-                  helpText="Lower values produce more deterministic output."
-                />
-                <Input
                   label="Max Tokens"
                   type="number"
                   min={256}
@@ -237,12 +239,20 @@ export function SettingsPage() {
                   onChange={(e) => updateField('llmMaxTokens', parseInt(e.target.value, 10) || 256)}
                   helpText="Maximum tokens in LLM response."
                 />
+                <Input
+                  label="Max Retries Per Step"
+                  type="number"
+                  min={0}
+                  value={String(settings.maxRetriesPerStep)}
+                  onChange={(e) => updateField('maxRetriesPerStep', parseInt(e.target.value, 10) || 0)}
+                  helpText="Maximum retries per pipeline step."
+                />
               </div>
             </Card>
 
-            {/* Export Limits */}
+            {/* Export & Retention */}
             <Card className="mt-6 space-y-5">
-              <h2 className="text-lg font-semibold text-text-primary">Export Limits</h2>
+              <h2 className="text-lg font-semibold text-text-primary">Export & Retention</h2>
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <Input
                   label="Max Export Rows"
@@ -253,35 +263,20 @@ export function SettingsPage() {
                   helpText="Maximum number of rows per CSV export."
                 />
                 <Input
-                  label="Export Timeout (Seconds)"
-                  type="number"
-                  min={10}
-                  value={String(settings.exportTimeoutSeconds)}
-                  onChange={(e) => updateField('exportTimeoutSeconds', parseInt(e.target.value, 10) || 10)}
-                  helpText="HTTP timeout for export requests."
-                />
-              </div>
-            </Card>
-
-            {/* Data Retention */}
-            <Card className="mt-6 space-y-5">
-              <h2 className="text-lg font-semibold text-text-primary">Data Retention</h2>
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                <Input
-                  label="Data Retention (Months)"
+                  label="Data Retention (Days)"
                   type="number"
                   min={1}
-                  value={String(settings.retentionMonths)}
-                  onChange={(e) => updateField('retentionMonths', parseInt(e.target.value, 10) || 1)}
+                  value={String(settings.retentionDays)}
+                  onChange={(e) => updateField('retentionDays', parseInt(e.target.value, 10) || 1)}
                   helpText="How long to keep content data before purging."
                 />
                 <Input
-                  label="Audit Log Retention (Months)"
+                  label="Default Schedule Interval (Min)"
                   type="number"
                   min={1}
-                  value={String(settings.auditRetentionMonths)}
-                  onChange={(e) => updateField('auditRetentionMonths', parseInt(e.target.value, 10) || 1)}
-                  helpText="How long to keep audit log entries."
+                  value={String(settings.defaultScheduleIntervalMinutes)}
+                  onChange={(e) => updateField('defaultScheduleIntervalMinutes', parseInt(e.target.value, 10) || 1)}
+                  helpText="Default crawl interval for new sources."
                 />
               </div>
             </Card>

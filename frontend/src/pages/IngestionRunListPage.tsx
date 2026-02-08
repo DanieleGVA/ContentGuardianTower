@@ -11,25 +11,21 @@ import { CHANNEL_ICON } from '../lib/design-tokens';
 
 interface IngestionRun {
   id: string;
-  sourceId: string;
-  sourceName: string;
+  sourceId: string | null;
   channel: string;
   status: string;
   itemsFetched: number;
   itemsChanged: number;
   itemsFailed: number;
-  durationMs: number | null;
   startedAt: string;
-  finishedAt: string | null;
+  completedAt: string | null;
   createdAt: string;
+  source: { id: string; displayName: string; channel: string; countryCode: string } | null;
 }
 
 interface IngestionRunListResponse {
   data: IngestionRun[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
+  meta: { total: number; page: number; pageSize: number; totalPages: number };
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -46,16 +42,6 @@ function formatDate(dateStr: string | null): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   });
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms === null || ms === undefined) return '--';
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return `${minutes}m ${remainingSeconds}s`;
 }
 
 function shortId(id: string): string {
@@ -85,10 +71,10 @@ export function IngestionRunListPage() {
       if (sortBy) params.set('sortBy', sortBy);
       params.set('sortOrder', sortOrder);
 
-      const res = await api.get<IngestionRunListResponse>(`/v1/ingestion-runs?${params.toString()}`);
+      const res = await api.get<IngestionRunListResponse>(`/ingestion-runs?${params.toString()}`);
       setData(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
+      setTotal(res.meta.total);
+      setTotalPages(res.meta.totalPages);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load ingestion runs.');
     } finally {
@@ -115,11 +101,10 @@ export function IngestionRunListPage() {
       ),
     },
     {
-      key: 'sourceName',
+      key: 'source',
       label: 'Source',
-      sortable: true,
       render: (row) => (
-        <span className="font-medium text-text-primary">{row.sourceName}</span>
+        <span className="font-medium text-text-primary">{row.source?.displayName ?? '--'}</span>
       ),
     },
     {
@@ -162,13 +147,6 @@ export function IngestionRunListPage() {
         <span className={`text-sm ${row.itemsFailed > 0 ? 'font-medium text-red-600' : 'text-text-primary'}`}>
           {row.itemsFailed}
         </span>
-      ),
-    },
-    {
-      key: 'durationMs',
-      label: 'Duration',
-      render: (row) => (
-        <span className="text-sm text-text-secondary">{formatDuration(row.durationMs)}</span>
       ),
     },
     {

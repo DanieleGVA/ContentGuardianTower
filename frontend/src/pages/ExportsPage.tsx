@@ -6,28 +6,29 @@ import { Badge } from '../components/ui/Badge';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Skeleton } from '../components/ui/Skeleton';
+import { useToast } from '../components/ui/Toast';
 import { api } from '../lib/api-client';
 
 interface ExportRecord {
   id: string;
-  type: string;
+  exportType: string;
   status: string;
   rowCount: number | null;
-  fileName: string | null;
+  storageKey: string | null;
   createdAt: string;
   completedAt: string | null;
-  error: string | null;
+  lastError: string | null;
 }
 
 interface ExportHistoryResponse {
   data: ExportRecord[];
-  total: number;
+  meta: { total: number; page: number; pageSize: number; totalPages: number };
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  PENDING: 'bg-gray-100 text-gray-600',
-  PROCESSING: 'bg-blue-100 text-blue-700',
-  COMPLETED: 'bg-green-100 text-green-700',
+  QUEUED: 'bg-gray-100 text-gray-600',
+  RUNNING: 'bg-blue-100 text-blue-700',
+  SUCCEEDED: 'bg-green-100 text-green-700',
   FAILED: 'bg-red-100 text-red-700',
 };
 
@@ -45,12 +46,13 @@ export function ExportsPage() {
   const [error, setError] = useState<string | null>(null);
   const [exportingTickets, setExportingTickets] = useState(false);
   const [exportingAudit, setExportingAudit] = useState(false);
+  const { toast } = useToast();
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<ExportHistoryResponse>('/v1/exports');
+      const res = await api.get<ExportHistoryResponse>('/exports');
       setHistory(res.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load export history.');
@@ -63,16 +65,19 @@ export function ExportsPage() {
     fetchHistory();
   }, [fetchHistory]);
 
-  async function handleExport(type: 'tickets' | 'audit') {
-    const setExporting = type === 'tickets' ? setExportingTickets : setExportingAudit;
+  async function handleExport(exportType: 'TICKETS_CSV' | 'AUDIT_CSV') {
+    const setExporting = exportType === 'TICKETS_CSV' ? setExportingTickets : setExportingAudit;
     setExporting(true);
     setError(null);
 
     try {
-      await api.post('/v1/exports', { type });
+      await api.post('/exports', { exportType });
+      toast({ title: 'Export queued', variant: 'success' });
       fetchHistory();
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to start ${type} export.`);
+      const msg = err instanceof Error ? err.message : `Failed to start export.`;
+      toast({ title: 'Export failed', description: msg, variant: 'error' });
+      setError(msg);
     } finally {
       setExporting(false);
     }
@@ -80,13 +85,13 @@ export function ExportsPage() {
 
   const columns: Column<ExportRecord>[] = [
     {
-      key: 'type',
+      key: 'exportType',
       label: 'Export Type',
       render: (row) => (
         <Badge
           variant="custom"
-          value={row.type === 'tickets' ? 'Tickets' : row.type === 'audit' ? 'Audit Log' : row.type}
-          className={row.type === 'tickets' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}
+          value={row.exportType === 'TICKETS_CSV' ? 'Tickets' : row.exportType === 'AUDIT_CSV' ? 'Audit Log' : row.exportType}
+          className={row.exportType === 'TICKETS_CSV' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}
         />
       ),
     },
@@ -128,16 +133,16 @@ export function ExportsPage() {
       key: 'actions',
       label: '',
       render: (row) =>
-        row.status === 'COMPLETED' && row.fileName ? (
+        row.status === 'SUCCEEDED' && row.storageKey ? (
           <a
-            href={`/api/v1/exports/${row.id}/download`}
+            href={`/api/exports/${row.id}/download`}
             className="text-sm font-medium text-primary hover:underline"
             download
           >
             Download
           </a>
-        ) : row.error ? (
-          <span className="text-xs text-red-600" title={row.error}>
+        ) : row.lastError ? (
+          <span className="text-xs text-red-600" title={row.lastError}>
             Error
           </span>
         ) : null,
@@ -178,7 +183,7 @@ export function ExportsPage() {
             </div>
             <div className="mt-4">
               <Button
-                onClick={() => handleExport('tickets')}
+                onClick={() => handleExport('TICKETS_CSV')}
                 loading={exportingTickets}
                 size="sm"
               >
@@ -198,7 +203,7 @@ export function ExportsPage() {
             </div>
             <div className="mt-4">
               <Button
-                onClick={() => handleExport('audit')}
+                onClick={() => handleExport('AUDIT_CSV')}
                 loading={exportingAudit}
                 size="sm"
               >

@@ -24,14 +24,13 @@ interface Rule {
   applicableChannels: string[];
   applicableCountries: string[];
   createdAt: string;
+  activeVersion?: { id: string; version: number; payload: unknown } | null;
+  createdBy?: { id: string; username: string; fullName: string };
 }
 
 interface RuleListResponse {
   data: Rule[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
+  meta: { total: number; page: number; pageSize: number; totalPages: number };
 }
 
 const SEVERITY_OPTIONS = [
@@ -95,10 +94,10 @@ export function RuleListPage() {
       if (filters.active) params.set('active', filters.active);
       if (filters.type) params.set('type', filters.type);
 
-      const res = await api.get<RuleListResponse>(`/v1/rules?${params.toString()}`);
+      const res = await api.get<RuleListResponse>(`/rules?${params.toString()}`);
       setData(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
+      setTotal(res.meta.total);
+      setTotalPages(res.meta.totalPages);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load rules.');
     } finally {

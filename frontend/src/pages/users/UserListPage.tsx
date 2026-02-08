@@ -26,10 +26,7 @@ interface User {
 
 interface UserListResponse {
   data: User[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
+  meta: { total: number; page: number; pageSize: number; totalPages: number };
 }
 
 const ROLE_STYLES: Record<string, string> = {
@@ -74,10 +71,10 @@ export function UserListPage() {
       if (sortBy) params.set('sortBy', sortBy);
       params.set('sortOrder', sortOrder);
 
-      const res = await api.get<UserListResponse>(`/v1/users?${params.toString()}`);
+      const res = await api.get<UserListResponse>(`/users?${params.toString()}`);
       setData(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
+      setTotal(res.meta.total);
+      setTotalPages(res.meta.totalPages);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load users.');
     } finally {

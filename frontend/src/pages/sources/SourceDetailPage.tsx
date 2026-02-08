@@ -8,6 +8,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
 import { Skeleton } from '../../components/ui/Skeleton';
 import { useAuth } from '../../hooks/useAuth';
+import { useToast } from '../../components/ui/Toast';
 import { api } from '../../lib/api-client';
 import { CHANNEL_ICON } from '../../lib/design-tokens';
 
@@ -16,16 +17,28 @@ interface Source {
   displayName: string;
   platform: string;
   channel: string;
-  countryCode: string;
   sourceType: string;
   identifier: string;
+  countryCode: string;
   isEnabled: boolean;
-  crawlFrequencyMinutes: number;
+  crawlFrequencyMinutes: number | null;
+  startUrls: string[];
+  domainAllowlist: string[];
+  keywords: string[];
+  languageTargets: string[];
+  urlAllowPatterns: string[];
+  urlBlockPatterns: string[];
   lastRunAt: string | null;
   nextRunAt: string | null;
-  config: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
+  credential?: {
+    id: string;
+    platform: string;
+    maskedHint: string;
+    lastTestStatus: string;
+    lastTestedAt: string;
+  } | null;
 }
 
 function formatDate(dateStr: string | null): string {
@@ -47,6 +60,7 @@ export function SourceDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [triggerLoading, setTriggerLoading] = useState(false);
+  const { toast } = useToast();
 
   const isAdmin = user?.role === 'ADMIN';
 
@@ -55,7 +69,7 @@ export function SourceDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<Source>(`/v1/sources/${id}`);
+      const res = await api.get<Source>(`/sources/${id}`);
       setSource(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load source.');
@@ -72,10 +86,12 @@ export function SourceDetailPage() {
     if (!id) return;
     setDeleting(true);
     try {
-      await api.delete(`/v1/sources/${id}`);
+      await api.delete(`/sources/${id}`);
+      toast({ title: 'Source deleted', variant: 'success' });
       navigate('/sources', { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete source.');
+      const msg = err instanceof Error ? err.message : 'Failed to delete source.';
+      toast({ title: 'Failed to delete source', description: msg, variant: 'error' });
       setDeleteOpen(false);
     } finally {
       setDeleting(false);
@@ -86,10 +102,12 @@ export function SourceDetailPage() {
     if (!id) return;
     setTriggerLoading(true);
     try {
-      await api.post('/v1/ingestion-runs', { sourceId: id });
+      await api.post(`/sources/${id}/trigger`);
+      toast({ title: 'Ingestion run triggered', variant: 'success' });
       fetchSource();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to trigger run.');
+      const msg = err instanceof Error ? err.message : 'Failed to trigger run.';
+      toast({ title: 'Failed to trigger run', description: msg, variant: 'error' });
     } finally {
       setTriggerLoading(false);
     }
@@ -137,7 +155,7 @@ export function SourceDetailPage() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="flex items-start gap-4">
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-2xl">
-                    {CHANNEL_ICON[source.platform] ?? '📄'}
+                    {CHANNEL_ICON[source.channel] ?? '📄'}
                   </div>
                   <div>
                     <div className="flex items-center gap-3">
@@ -151,8 +169,6 @@ export function SourceDetailPage() {
                       )}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-text-secondary">
-                      <span>{source.platform}</span>
-                      <span aria-hidden="true">·</span>
                       <span>{source.channel}</span>
                       <span aria-hidden="true">·</span>
                       <span>{source.countryCode}</span>
@@ -196,22 +212,22 @@ export function SourceDetailPage() {
               {/* Run dates */}
               <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div>
-                  <dt className="text-xs font-medium uppercase text-text-muted">Last Run</dt>
-                  <dd className="mt-1 text-sm text-text-primary">{formatDate(source.lastRunAt)}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-medium uppercase text-text-muted">Next Run</dt>
-                  <dd className="mt-1 text-sm text-text-primary">{formatDate(source.nextRunAt)}</dd>
-                </div>
-                <div>
                   <dt className="text-xs font-medium uppercase text-text-muted">Crawl Frequency</dt>
-                  <dd className="mt-1 text-sm text-text-primary">{source.crawlFrequencyMinutes} min</dd>
+                  <dd className="mt-1 text-sm text-text-primary">{source.crawlFrequencyMinutes ?? '--'} min</dd>
                 </div>
                 <div>
                   <dt className="text-xs font-medium uppercase text-text-muted">Identifier</dt>
                   <dd className="mt-1 truncate text-sm text-text-primary" title={source.identifier}>
                     {source.identifier}
                   </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase text-text-muted">Last Run</dt>
+                  <dd className="mt-1 text-sm text-text-primary">{formatDate(source.lastRunAt)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-medium uppercase text-text-muted">Created</dt>
+                  <dd className="mt-1 text-sm text-text-primary">{formatDate(source.createdAt)}</dd>
                 </div>
               </div>
             </Card>
@@ -233,18 +249,32 @@ export function SourceDetailPage() {
                   <dd className="mt-1 text-sm text-text-primary">{formatDate(source.updatedAt)}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-medium uppercase text-text-muted">Platform</dt>
-                  <dd className="mt-1 text-sm text-text-primary">{source.platform}</dd>
+                  <dt className="text-xs font-medium uppercase text-text-muted">Channel</dt>
+                  <dd className="mt-1 text-sm text-text-primary">{source.channel}</dd>
                 </div>
               </dl>
 
-              {/* Raw config JSON */}
-              {source.config && Object.keys(source.config).length > 0 && (
+              {/* Start URLs */}
+              {source.startUrls.length > 0 && (
                 <div className="mt-6">
-                  <h3 className="text-sm font-semibold text-text-primary">Raw Config</h3>
-                  <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-gray-50 p-4 text-xs text-text-secondary">
-                    {JSON.stringify(source.config, null, 2)}
-                  </pre>
+                  <h3 className="text-sm font-semibold text-text-primary">Start URLs</h3>
+                  <ul className="mt-2 space-y-1">
+                    {source.startUrls.map((url, i) => (
+                      <li key={i} className="truncate text-sm text-primary">{url}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Keywords */}
+              {source.keywords.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="text-sm font-semibold text-text-primary">Keywords</h3>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {source.keywords.map((kw, i) => (
+                      <span key={i} className="rounded bg-gray-100 px-2 py-1 text-xs text-text-secondary">{kw}</span>
+                    ))}
+                  </div>
                 </div>
               )}
             </Card>

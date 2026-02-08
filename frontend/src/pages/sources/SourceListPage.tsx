@@ -17,26 +17,22 @@ import { CHANNEL_ICON } from '../../lib/design-tokens';
 interface Source {
   id: string;
   displayName: string;
-  platform: string;
   channel: string;
+  sourceType: string;
   countryCode: string;
   isEnabled: boolean;
-  lastRunAt: string | null;
-  nextRunAt: string | null;
-  sourceType: string;
+  crawlFrequencyMinutes: number;
   createdAt: string;
+  updatedAt: string;
 }
 
 interface SourceListResponse {
   data: Source[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
+  meta: { total: number; page: number; pageSize: number; totalPages: number };
 }
 
-const PLATFORM_OPTIONS = [
-  { value: '', label: 'All Platforms' },
+const CHANNEL_OPTIONS = [
+  { value: '', label: 'All Channels' },
   { value: 'WEB', label: 'Web' },
   { value: 'FACEBOOK', label: 'Facebook' },
   { value: 'INSTAGRAM', label: 'Instagram' },
@@ -79,28 +75,26 @@ export function SourceListPage() {
       const params = new URLSearchParams();
       params.set('page', String(page));
       params.set('pageSize', String(pageSize));
-      if (filters.platform) params.set('platform', filters.platform);
-      if (filters.country) params.set('country', filters.country);
-      if (filters.enabled) params.set('enabled', filters.enabled);
+      if (filters.channel) params.set('channel', filters.channel);
+      if (filters.enabled) params.set('isEnabled', filters.enabled);
 
-      const res = await api.get<SourceListResponse>(`/v1/sources?${params.toString()}`);
+      const res = await api.get<SourceListResponse>(`/sources?${params.toString()}`);
       setData(res.data);
-      setTotal(res.total);
-      setTotalPages(res.totalPages);
+      setTotal(res.meta.total);
+      setTotalPages(res.meta.totalPages);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load sources.');
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, filters.platform, filters.country, filters.enabled]);
+  }, [page, pageSize, filters.channel, filters.enabled]);
 
   useEffect(() => {
     fetchSources();
   }, [fetchSources]);
 
   const filterLabels: Record<string, string> = {
-    platform: 'Platform',
-    country: 'Country',
+    channel: 'Channel',
     enabled: 'Enabled',
   };
 
@@ -133,11 +127,11 @@ export function SourceListPage() {
           onClearAll={clearFilters}
         >
           <Select
-            label="Platform"
-            options={PLATFORM_OPTIONS}
-            value={filters.platform ?? ''}
-            onValueChange={(v) => setFilter('platform', v || undefined)}
-            placeholder="All Platforms"
+            label="Channel"
+            options={CHANNEL_OPTIONS}
+            value={filters.channel ?? ''}
+            onValueChange={(v) => setFilter('channel', v || undefined)}
+            placeholder="All Channels"
           />
           <Select
             label="Enabled"
@@ -197,9 +191,9 @@ export function SourceListPage() {
                 onClick={() => navigate(`/sources/${source.id}`)}
                 className="flex items-center gap-4"
               >
-                {/* Platform icon */}
+                {/* Channel icon */}
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-xl">
-                  {CHANNEL_ICON[source.platform] ?? '📄'}
+                  {CHANNEL_ICON[source.channel] ?? '📄'}
                 </div>
 
                 {/* Name & details */}
@@ -215,7 +209,7 @@ export function SourceListPage() {
                     )}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-                    <span>{source.platform}</span>
+                    <span>{source.channel}</span>
                     <span aria-hidden="true">·</span>
                     <span>{source.countryCode}</span>
                     <span aria-hidden="true">·</span>
@@ -223,15 +217,15 @@ export function SourceListPage() {
                   </div>
                 </div>
 
-                {/* Run dates */}
+                {/* Crawl frequency */}
                 <div className="hidden shrink-0 text-right text-xs text-text-secondary sm:block">
                   <div>
-                    <span className="text-text-muted">Last run:</span>{' '}
-                    {formatDate(source.lastRunAt)}
+                    <span className="text-text-muted">Frequency:</span>{' '}
+                    {source.crawlFrequencyMinutes} min
                   </div>
                   <div className="mt-0.5">
-                    <span className="text-text-muted">Next run:</span>{' '}
-                    {formatDate(source.nextRunAt)}
+                    <span className="text-text-muted">Created:</span>{' '}
+                    {formatDate(source.createdAt)}
                   </div>
                 </div>
               </Card>

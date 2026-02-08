@@ -7,11 +7,11 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Skeleton } from '../../components/ui/Skeleton';
+import { useToast } from '../../components/ui/Toast';
 import { api, ApiClientError } from '../../lib/api-client';
 
 interface SourceFormData {
   displayName: string;
-  platform: string;
   channel: string;
   countryCode: string;
   sourceType: string;
@@ -20,14 +20,6 @@ interface SourceFormData {
   startUrls: string;
   keywords: string;
 }
-
-const PLATFORM_OPTIONS = [
-  { value: 'WEB', label: 'Web' },
-  { value: 'FACEBOOK', label: 'Facebook' },
-  { value: 'INSTAGRAM', label: 'Instagram' },
-  { value: 'LINKEDIN', label: 'LinkedIn' },
-  { value: 'YOUTUBE', label: 'YouTube' },
-];
 
 const CHANNEL_OPTIONS = [
   { value: 'WEB', label: 'Web' },
@@ -40,14 +32,12 @@ const CHANNEL_OPTIONS = [
 const SOURCE_TYPE_OPTIONS = [
   { value: 'WEB_OWNED', label: 'Web Owned' },
   { value: 'WEB_SEARCH_DISCOVERY', label: 'Web Search Discovery' },
-  { value: 'SOCIAL_PROFILE', label: 'Social Profile' },
-  { value: 'SOCIAL_HASHTAG', label: 'Social Hashtag' },
-  { value: 'SOCIAL_KEYWORD', label: 'Social Keyword' },
+  { value: 'SOCIAL_ACCOUNT', label: 'Social Account' },
+  { value: 'YOUTUBE_CHANNEL', label: 'YouTube Channel' },
 ];
 
 const INITIAL_FORM: SourceFormData = {
   displayName: '',
-  platform: '',
   channel: '',
   countryCode: '',
   sourceType: '',
@@ -67,25 +57,25 @@ export function SourceFormPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const { toast } = useToast();
 
   const fetchSource = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     try {
-      const res = await api.get<Record<string, unknown>>(`/v1/sources/${id}`);
+      const res = await api.get<Record<string, unknown>>(`/sources/${id}`);
       setForm({
         displayName: String(res.displayName ?? ''),
-        platform: String(res.platform ?? ''),
         channel: String(res.channel ?? ''),
         countryCode: String(res.countryCode ?? ''),
         sourceType: String(res.sourceType ?? ''),
         identifier: String(res.identifier ?? ''),
         crawlFrequencyMinutes: Number(res.crawlFrequencyMinutes ?? 60),
-        startUrls: Array.isArray((res.config as Record<string, unknown>)?.startUrls)
-          ? ((res.config as Record<string, unknown>).startUrls as string[]).join('\n')
+        startUrls: Array.isArray(res.startUrls)
+          ? (res.startUrls as string[]).join('\n')
           : '',
-        keywords: Array.isArray((res.config as Record<string, unknown>)?.keywords)
-          ? ((res.config as Record<string, unknown>).keywords as string[]).join('\n')
+        keywords: Array.isArray(res.keywords)
+          ? (res.keywords as string[]).join('\n')
           : '',
       });
     } catch (err) {
@@ -111,7 +101,6 @@ export function SourceFormPage() {
   function validate(): boolean {
     const errors: Record<string, string> = {};
     if (!form.displayName.trim()) errors.displayName = 'Display name is required.';
-    if (!form.platform) errors.platform = 'Platform is required.';
     if (!form.channel) errors.channel = 'Channel is required.';
     if (!form.countryCode.trim()) errors.countryCode = 'Country code is required.';
     if (!form.sourceType) errors.sourceType = 'Source type is required.';
@@ -127,31 +116,39 @@ export function SourceFormPage() {
     setSaving(true);
     setError(null);
 
-    const config: Record<string, unknown> = {};
-    if (form.sourceType === 'WEB_OWNED' && form.startUrls.trim()) {
-      config.startUrls = form.startUrls.split('\n').map((u) => u.trim()).filter(Boolean);
-    }
-    if (form.sourceType === 'WEB_SEARCH_DISCOVERY' && form.keywords.trim()) {
-      config.keywords = form.keywords.split('\n').map((k) => k.trim()).filter(Boolean);
-    }
-
-    const payload = {
-      displayName: form.displayName.trim(),
-      platform: form.platform,
-      channel: form.channel,
-      countryCode: form.countryCode.trim().toUpperCase(),
-      sourceType: form.sourceType,
-      identifier: form.identifier.trim(),
-      crawlFrequencyMinutes: form.crawlFrequencyMinutes,
-      config,
-    };
+    const startUrls = form.startUrls.trim()
+      ? form.startUrls.split('\n').map((u) => u.trim()).filter(Boolean)
+      : [];
+    const keywords = form.keywords.trim()
+      ? form.keywords.split('\n').map((k) => k.trim()).filter(Boolean)
+      : [];
 
     try {
       if (isEdit) {
-        await api.put(`/v1/sources/${id}`, payload);
+        // Only send updatable fields
+        const updatePayload = {
+          displayName: form.displayName.trim(),
+          crawlFrequencyMinutes: form.crawlFrequencyMinutes,
+          startUrls,
+          keywords,
+        };
+        await api.put(`/sources/${id}`, updatePayload);
+        toast({ title: 'Source updated', variant: 'success' });
         navigate(`/sources/${id}`);
       } else {
-        const res = await api.post<{ id: string }>('/v1/sources', payload);
+        const createPayload = {
+          platform: form.channel.toLowerCase(),
+          channel: form.channel,
+          countryCode: form.countryCode.trim().toUpperCase(),
+          sourceType: form.sourceType,
+          identifier: form.identifier.trim(),
+          displayName: form.displayName.trim(),
+          crawlFrequencyMinutes: form.crawlFrequencyMinutes,
+          startUrls,
+          keywords,
+        };
+        const res = await api.post<{ id: string }>('/sources', createPayload);
+        toast({ title: 'Source created', variant: 'success' });
         navigate(`/sources/${res.id}`);
       }
     } catch (err) {
@@ -160,6 +157,7 @@ export function SourceFormPage() {
       } else {
         setError(err instanceof Error ? err.message : 'Failed to save source.');
       }
+      toast({ title: 'Failed to save source', variant: 'error' });
     } finally {
       setSaving(false);
     }
@@ -211,31 +209,12 @@ export function SourceFormPage() {
 
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <Select
-                  label="Platform"
-                  options={PLATFORM_OPTIONS}
-                  value={form.platform}
-                  onValueChange={(v) => updateField('platform', v)}
-                  error={fieldErrors.platform}
-                  placeholder="Select platform"
-                />
-                <Select
                   label="Channel"
                   options={CHANNEL_OPTIONS}
                   value={form.channel}
                   onValueChange={(v) => updateField('channel', v)}
                   error={fieldErrors.channel}
                   placeholder="Select channel"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                <Input
-                  label="Country Code"
-                  value={form.countryCode}
-                  onChange={(e) => updateField('countryCode', e.target.value)}
-                  error={fieldErrors.countryCode}
-                  placeholder="e.g., IT"
-                  maxLength={2}
                 />
                 <Select
                   label="Source Type"
@@ -248,12 +227,22 @@ export function SourceFormPage() {
               </div>
 
               <Input
+                label="Country Code"
+                value={form.countryCode}
+                onChange={(e) => updateField('countryCode', e.target.value)}
+                error={fieldErrors.countryCode}
+                placeholder="e.g., IT"
+                maxLength={2}
+              />
+
+              <Input
                 label="Identifier"
                 value={form.identifier}
                 onChange={(e) => updateField('identifier', e.target.value)}
                 error={fieldErrors.identifier}
-                placeholder="URL or profile identifier"
-                helpText="The URL, profile handle, or unique identifier for this source."
+                placeholder="https://example.com or account handle"
+                helpText="The URL, account handle, or unique identifier for this source."
+                required
               />
 
               <Input

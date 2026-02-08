@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Skeleton } from '../../components/ui/Skeleton';
+import { useToast } from '../../components/ui/Toast';
 import { api, ApiClientError } from '../../lib/api-client';
 
 interface UserFormData {
@@ -54,12 +55,13 @@ export function UserFormPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const { toast } = useToast();
 
   const fetchUser = useCallback(async () => {
     if (!id) return;
     setLoading(true);
     try {
-      const res = await api.get<Record<string, unknown>>(`/v1/users/${id}`);
+      const res = await api.get<Record<string, unknown>>(`/users/${id}`);
       setForm({
         username: String(res.username ?? ''),
         email: String(res.email ?? ''),
@@ -135,10 +137,12 @@ export function UserFormPage() {
 
     try {
       if (isEdit) {
-        await api.put(`/v1/users/${id}`, payload);
+        await api.put(`/users/${id}`, payload);
+        toast({ title: 'User updated', variant: 'success' });
         navigate('/users');
       } else {
-        await api.post('/v1/users', payload);
+        await api.post('/users', payload);
+        toast({ title: 'User created', variant: 'success' });
         navigate('/users');
       }
     } catch (err) {
@@ -147,6 +151,7 @@ export function UserFormPage() {
       } else {
         setError(err instanceof Error ? err.message : 'Failed to save user.');
       }
+      toast({ title: 'Failed to save user', variant: 'error' });
     } finally {
       setSaving(false);
     }

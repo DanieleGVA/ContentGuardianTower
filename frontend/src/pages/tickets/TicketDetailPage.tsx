@@ -20,6 +20,7 @@ import { Skeleton } from '../../components/ui/Skeleton';
 import { Tabs, TabsContent } from '../../components/ui/Tabs';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { api } from '../../lib/api-client';
+import { useToast } from '../../components/ui/Toast';
 import { TICKET_STATUS, CHANNEL_ICON } from '../../lib/design-tokens';
 import { cn } from '../../lib/cn';
 
@@ -97,13 +98,29 @@ interface TicketDetail {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Status options for dropdown                                        */
+/*  Valid status transitions                                           */
 /* ------------------------------------------------------------------ */
 
-const STATUS_CHANGE_OPTIONS = Object.entries(TICKET_STATUS).map(([key, val]) => ({
-  value: key,
-  label: val.label,
-}));
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  OPEN: ['IN_PROGRESS', 'CLOSED'],
+  IN_PROGRESS: ['RESOLVED', 'OPEN'],
+  RESOLVED: ['CLOSED', 'IN_PROGRESS'],
+  CLOSED: ['OPEN'],
+};
+
+function getStatusOptions(currentStatus: string): { value: string; label: string }[] {
+  const validNext = VALID_TRANSITIONS[currentStatus] ?? [];
+  const options = [
+    { value: currentStatus, label: TICKET_STATUS[currentStatus as keyof typeof TICKET_STATUS]?.label ?? currentStatus },
+  ];
+  for (const status of validNext) {
+    const info = TICKET_STATUS[status as keyof typeof TICKET_STATUS];
+    if (info) {
+      options.push({ value: status, label: info.label });
+    }
+  }
+  return options;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
@@ -123,6 +140,7 @@ export function TicketDetailPage() {
 
   const [commentText, setCommentText] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const { toast } = useToast();
 
   const fetchTicket = useCallback(async () => {
     if (!id) return;
@@ -148,8 +166,11 @@ export function TicketDetailPage() {
       setStatusUpdating(true);
       await api.put(`/tickets/${ticket.id}/status`, { status: newStatus });
       setTicket((prev) => prev ? { ...prev, status: newStatus } : prev);
+      toast({ title: `Status changed to ${TICKET_STATUS[newStatus as keyof typeof TICKET_STATUS]?.label ?? newStatus}`, variant: 'success' });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update status');
+      const msg = err instanceof Error ? err.message : 'Failed to update status';
+      toast({ title: 'Status update failed', description: msg, variant: 'error' });
+      setError(msg);
     } finally {
       setStatusUpdating(false);
     }
@@ -160,10 +181,12 @@ export function TicketDetailPage() {
     try {
       setAssigneeUpdating(true);
       await api.put(`/tickets/${ticket.id}/assign`, { assigneeUserId: assigneeUserId || null });
-      // Refetch to get updated assignee info
+      toast({ title: 'Assignee updated', variant: 'success' });
       await fetchTicket();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update assignee');
+      const msg = err instanceof Error ? err.message : 'Failed to update assignee';
+      toast({ title: 'Assignment failed', description: msg, variant: 'error' });
+      setError(msg);
     } finally {
       setAssigneeUpdating(false);
     }
@@ -177,11 +200,14 @@ export function TicketDetailPage() {
         body: commentText.trim(),
       });
       setTicket((prev) =>
-        prev ? { ...prev, comments: [newComment, ...prev.comments] } : prev,
+        prev ? { ...prev, comments: [...prev.comments, newComment] } : prev,
       );
       setCommentText('');
+      toast({ title: 'Comment added', variant: 'success' });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add comment');
+      const msg = err instanceof Error ? err.message : 'Failed to add comment';
+      toast({ title: 'Comment failed', description: msg, variant: 'error' });
+      setError(msg);
     } finally {
       setCommentSubmitting(false);
     }
@@ -209,6 +235,7 @@ export function TicketDetailPage() {
     { value: 'evidence', label: 'Evidence', count: ticket?.analysis?.violations?.length },
     { value: 'revisions', label: 'Revisions' },
     { value: 'comments', label: 'Comments', count: ticket?.comments?.length },
+    { value: 'attachments', label: 'Attachments', count: ticket?.attachments?.length },
     { value: 'history', label: 'History', count: ticket?.events?.length },
   ];
 
@@ -318,7 +345,7 @@ export function TicketDetailPage() {
           <div className="w-48">
             <Select
               label="Status"
-              options={STATUS_CHANGE_OPTIONS}
+              options={getStatusOptions(ticket.status)}
               value={ticket.status}
               onValueChange={handleStatusChange}
               disabled={statusUpdating}
@@ -548,6 +575,46 @@ export function TicketDetailPage() {
                 </Button>
               </div>
             </Card>
+          </div>
+        </TabsContent>
+
+        {/* Attachments Tab */}
+        <TabsContent value="attachments">
+          <div className="space-y-4">
+            {(!ticket.attachments || ticket.attachments.length === 0) && (
+              <EmptyState
+                icon={<FileText className="h-8 w-8" />}
+                title="No attachments"
+                description="No files have been attached to this ticket yet."
+              />
+            )}
+
+            {ticket.attachments && ticket.attachments.length > 0 && (
+              <div className="space-y-3">
+                {ticket.attachments.map((att) => (
+                  <Card key={att.id} className="border border-border">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <FileText className="h-5 w-5 text-text-secondary" />
+                        <div>
+                          <p className="text-sm font-medium text-text-primary">{att.fileName}</p>
+                          <p className="text-xs text-text-secondary">
+                            {(att.fileSizeBytes / 1024).toFixed(1)} KB &middot; {att.mimeType} &middot; {formatDate(att.createdAt)}
+                          </p>
+                        </div>
+                      </div>
+                      <a
+                        href={`/api/tickets/${ticket.id}/attachments/${att.id}/download`}
+                        className="text-sm font-medium text-primary hover:underline"
+                        download
+                      >
+                        Download
+                      </a>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
         </TabsContent>
 
