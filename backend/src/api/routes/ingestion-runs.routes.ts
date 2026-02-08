@@ -62,7 +62,7 @@ export default async function ingestionRunsRoutes(app: FastifyInstance) {
   // POST /api/ingestion-runs/:id/cancel
   app.post(
     '/:id/cancel',
-    { preHandler: [requireRole('ADMIN', 'GLOBAL_MANAGER')] },
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } }, preHandler: [requireRole('ADMIN', 'GLOBAL_MANAGER')] },
     async (request: FastifyRequest) => {
       const { id } = request.params as { id: string };
 

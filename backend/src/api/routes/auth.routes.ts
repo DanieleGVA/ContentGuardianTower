@@ -6,7 +6,7 @@ import { logAuditEvent } from '../../shared/audit.js';
 
 export default async function authRoutes(app: FastifyInstance) {
   // POST /api/auth/login
-  app.post('/login', async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/login', { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { username, password } = loginSchema.parse(request.body);
 
     const user = await app.prisma.user.findUnique({

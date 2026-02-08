@@ -6,6 +6,7 @@ import { parsePagination, buildPaginationMeta, buildPrismaSkipTake } from '../..
 import { buildCountryScopeFilter, assertCountryAccess } from '../../shared/country-scope.js';
 import { logAuditEvent } from '../../shared/audit.js';
 import { NotFoundError } from '../../shared/errors.js';
+import { PostgresSearchRepository } from '../../shared/repositories/postgres-search.repository.js';
 
 export default async function sourcesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
@@ -16,6 +17,13 @@ export default async function sourcesRoutes(app: FastifyInstance) {
     const { skip, take } = buildPrismaSkipTake(params);
     const query = request.query as Record<string, string>;
     const countryScope = buildCountryScopeFilter(request.user);
+
+    // Full-text search via ?q= parameter
+    if (query.q && query.q.trim()) {
+      const searchRepo = new PostgresSearchRepository(app.prisma);
+      const result = await searchRepo.searchSources({ query: query.q.trim(), page: params.page, pageSize: params.pageSize });
+      return { data: result.items, meta: { page: result.page, pageSize: result.pageSize, total: result.total, totalPages: Math.ceil(result.total / result.pageSize) } };
+    }
 
     const where: Prisma.SourceWhereInput = {
       isDeleted: false,
@@ -160,7 +168,7 @@ export default async function sourcesRoutes(app: FastifyInstance) {
   // POST /api/sources/:id/trigger (ADMIN + Managers)
   app.post(
     '/:id/trigger',
-    { preHandler: [requireRole('ADMIN', 'GLOBAL_MANAGER', 'REGIONAL_MANAGER', 'LOCAL_MANAGER')] },
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } }, preHandler: [requireRole('ADMIN', 'GLOBAL_MANAGER', 'REGIONAL_MANAGER', 'LOCAL_MANAGER')] },
     async (request: FastifyRequest) => {
       const { id } = request.params as { id: string };
 

@@ -3,6 +3,7 @@ import type { PrismaClient } from '@prisma/client';
 import { createWriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { logAuditEvent } from '../../shared/audit.js';
 
 interface ExportJobData {
   exportId: string;
@@ -91,6 +92,14 @@ export function registerExportHandler(boss: PgBoss, prisma: PrismaClient) {
           storageKey: filePath,
         },
       });
+
+      await logAuditEvent(prisma, {
+        eventType: 'EXPORT_COMPLETED',
+        entityType: 'EXPORT',
+        entityId: exportId,
+        actorType: 'SYSTEM',
+        message: `Export completed: ${rowCount} rows written to ${exportRecord.exportType}`,
+      });
     } catch (err) {
       await prisma.export.update({
         where: { id: exportId },
@@ -100,6 +109,15 @@ export function registerExportHandler(boss: PgBoss, prisma: PrismaClient) {
           lastError: err instanceof Error ? err.message : String(err),
         },
       });
+
+      await logAuditEvent(prisma, {
+        eventType: 'EXPORT_FAILED',
+        entityType: 'EXPORT',
+        entityId: exportId,
+        actorType: 'SYSTEM',
+        message: `Export failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+
       throw err;
     }
   });

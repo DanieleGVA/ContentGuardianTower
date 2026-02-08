@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { requireRole } from '../plugins/auth.plugin.js';
 import { auditListQuerySchema } from '../../shared/zod-schemas.js';
 import { parsePagination, buildPaginationMeta, buildPrismaSkipTake } from '../../shared/pagination.js';
+import { PostgresSearchRepository } from '../../shared/repositories/postgres-search.repository.js';
 
 export default async function auditRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
@@ -12,6 +13,13 @@ export default async function auditRoutes(app: FastifyInstance) {
     const query = auditListQuerySchema.parse(request.query);
     const params = parsePagination(query);
     const { skip, take } = buildPrismaSkipTake(params);
+
+    // Full-text search via ?q= parameter
+    if (query.q && query.q.trim()) {
+      const searchRepo = new PostgresSearchRepository(app.prisma);
+      const result = await searchRepo.searchAuditEvents({ query: query.q.trim(), page: params.page, pageSize: params.pageSize });
+      return { data: result.items, meta: { page: result.page, pageSize: result.pageSize, total: result.total, totalPages: Math.ceil(result.total / result.pageSize) } };
+    }
 
     const where: Record<string, unknown> = {
       ...(query.eventType ? { eventType: query.eventType } : {}),

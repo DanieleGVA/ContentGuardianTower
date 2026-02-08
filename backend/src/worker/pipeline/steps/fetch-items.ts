@@ -1,19 +1,8 @@
 import type { PipelineContext } from '../types.js';
-import { WebConnector } from '../../connectors/web.connector.js';
-import type { IConnector } from '../../connectors/base.connector.js';
-
-function getConnector(sourceType: string): IConnector {
-  switch (sourceType) {
-    case 'WEB_OWNED':
-    case 'WEB_SEARCH_DISCOVERY':
-      return new WebConnector();
-    default:
-      throw new Error(`No connector available for source type '${sourceType}'`);
-  }
-}
+import { getConnectorForSource } from '../../connectors/index.js';
 
 export async function fetchItems(ctx: PipelineContext): Promise<void> {
-  const connector = getConnector(ctx.source.sourceType);
+  const connector = getConnectorForSource(ctx.source);
   const items = await connector.fetch(ctx.source);
 
   // Record fetched items in database

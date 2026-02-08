@@ -1,4 +1,5 @@
 import type { PipelineContext } from '../types.js';
+import { logAuditEvent } from '../../../shared/audit.js';
 
 export async function upsertTicket(ctx: PipelineContext): Promise<void> {
   let ticketsCreated = 0;
@@ -86,12 +87,23 @@ export async function upsertTicket(ctx: PipelineContext): Promise<void> {
     });
 
     // Create CREATED event
+    const createdTicket = (await ctx.prisma.ticket.findUnique({ where: { ticketKey } }))!;
     await ctx.prisma.ticketEvent.create({
       data: {
-        ticketId: (await ctx.prisma.ticket.findUnique({ where: { ticketKey } }))!.id,
+        ticketId: createdTicket.id,
         eventType: 'CREATED',
         actorType: 'SYSTEM',
       },
+    });
+
+    await logAuditEvent(ctx.prisma, {
+      eventType: 'TICKET_CREATED',
+      entityType: 'TICKET',
+      entityId: createdTicket.id,
+      actorType: 'SYSTEM',
+      countryCode: ctx.source.countryCode,
+      channel: ctx.source.channel,
+      message: `Ticket created for ${result.complianceStatus} content (risk: ${riskLevel})`,
     });
 
     ticketsCreated++;

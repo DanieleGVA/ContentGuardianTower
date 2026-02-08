@@ -5,6 +5,7 @@ import { createRuleSchema, updateRuleSchema } from '../../shared/zod-schemas.js'
 import { parsePagination, buildPaginationMeta, buildPrismaSkipTake } from '../../shared/pagination.js';
 import { logAuditEvent } from '../../shared/audit.js';
 import { NotFoundError } from '../../shared/errors.js';
+import { PostgresSearchRepository } from '../../shared/repositories/postgres-search.repository.js';
 
 export default async function rulesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
@@ -14,6 +15,13 @@ export default async function rulesRoutes(app: FastifyInstance) {
     const params = parsePagination(request.query as Record<string, string>);
     const { skip, take } = buildPrismaSkipTake(params);
     const query = request.query as Record<string, string>;
+
+    // Full-text search via ?q= parameter
+    if (query.q && query.q.trim()) {
+      const searchRepo = new PostgresSearchRepository(app.prisma);
+      const result = await searchRepo.searchRules({ query: query.q.trim(), page: params.page, pageSize: params.pageSize });
+      return { data: result.items, meta: { page: result.page, pageSize: result.pageSize, total: result.total, totalPages: Math.ceil(result.total / result.pageSize) } };
+    }
 
     const where = {
       ...(query.severity ? { severity: query.severity as 'LOW' | 'MEDIUM' | 'HIGH' } : {}),

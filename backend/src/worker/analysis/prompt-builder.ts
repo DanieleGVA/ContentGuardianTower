@@ -7,6 +7,8 @@ const PII_PATTERNS = [
   { pattern: /\b[\w.+-]+@[\w-]+\.[\w.]+\b/g, replacement: '[EMAIL]' },
   { pattern: /\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/g, replacement: '[PHONE]' },
   { pattern: /\b\d{2,3}[-.]?\d{6,8}[-.]?\d{0,4}\b/g, replacement: '[ID_NUMBER]' },
+  { pattern: /\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b/g, replacement: '[CREDIT_CARD]' },
+  { pattern: /\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}([A-Z0-9]?\d{0,16})\b/g, replacement: '[IBAN]' },
 ];
 
 function redactPii(text: string): string {

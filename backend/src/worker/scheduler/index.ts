@@ -3,6 +3,7 @@ import type { PrismaClient } from '@prisma/client';
 import { SCHEDULER_LOCKS } from '../../shared/types/index.js';
 import { runEscalationScan } from './escalation.js';
 import { queueDueIngestionRuns } from './periodic-ingestion.js';
+import { runRetentionPurge } from './retention.js';
 
 const SCHEDULER_INTERVAL_MS = 60_000; // 60 seconds
 
@@ -47,6 +48,21 @@ export function startScheduler(prisma: PrismaClient, boss: PgBoss): NodeJS.Timeo
         console.error('Periodic ingestion failed:', err);
       } finally {
         await releaseAdvisoryLock(prisma, SCHEDULER_LOCKS.PERIODIC_INGESTION);
+      }
+    }
+
+    // Retention purge
+    const gotRetentionLock = await tryAdvisoryLock(prisma, SCHEDULER_LOCKS.RETENTION_PURGE);
+    if (gotRetentionLock) {
+      try {
+        const result = await runRetentionPurge(prisma);
+        if (result.auditEventsDeleted > 0 || result.ingestionRunsDeleted > 0) {
+          console.log(`Retention purge: ${result.auditEventsDeleted} audit events, ${result.ingestionRunsDeleted} runs deleted`);
+        }
+      } catch (err) {
+        console.error('Retention purge failed:', err);
+      } finally {
+        await releaseAdvisoryLock(prisma, SCHEDULER_LOCKS.RETENTION_PURGE);
       }
     }
   }, SCHEDULER_INTERVAL_MS);

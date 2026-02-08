@@ -140,6 +140,7 @@ export function TicketDetailPage() {
 
   const [commentText, setCommentText] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
+  const [allUsers, setAllUsers] = useState<UserRef[]>([]);
   const { toast } = useToast();
 
   const fetchTicket = useCallback(async () => {
@@ -159,6 +160,21 @@ export function TicketDetailPage() {
   useEffect(() => {
     fetchTicket();
   }, [fetchTicket]);
+
+  useEffect(() => {
+    async function fetchUsers() {
+      try {
+        const result = await api.get<{ data: Array<UserRef & { role: string }> }>('/users?pageSize=100');
+        const eligible = result.data.filter((u) =>
+          ['ADMIN', 'GLOBAL_MANAGER', 'REGIONAL_MANAGER', 'LOCAL_MANAGER'].includes(u.role),
+        );
+        setAllUsers(eligible);
+      } catch {
+        // Silently fail — dropdown will just show current assignee
+      }
+    }
+    fetchUsers();
+  }, []);
 
   async function handleStatusChange(newStatus: string) {
     if (!ticket || newStatus === ticket.status) return;
@@ -295,7 +311,7 @@ export function TicketDetailPage() {
 
   const assigneeOptions = [
     { value: '', label: 'Unassigned' },
-    ...(ticket.assignee ? [{ value: ticket.assignee.id, label: ticket.assignee.fullName }] : []),
+    ...allUsers.map((u) => ({ value: u.id, label: u.fullName })),
   ];
 
   return (

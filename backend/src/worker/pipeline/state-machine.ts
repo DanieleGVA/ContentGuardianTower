@@ -1,6 +1,7 @@
 import type { PrismaClient, Prisma } from '@prisma/client';
 import type { IngestionStep } from '../../shared/types/index.js';
 import type { PipelineContext, StepDefinition } from './types.js';
+import { logAuditEvent } from '../../shared/audit.js';
 import { runStart } from './steps/run-start.js';
 import { fetchItems } from './steps/fetch-items.js';
 import { normalizeHash } from './steps/normalize-hash.js';
@@ -155,6 +156,17 @@ export async function executePipeline(
         where: { id: runId },
         data: { status: 'FAILED', completedAt: new Date(), lastError },
       });
+
+      await logAuditEvent(prisma, {
+        eventType: 'INGESTION_RUN_FAILED',
+        entityType: 'INGESTION_RUN',
+        entityId: runId,
+        actorType: 'SYSTEM',
+        countryCode: ctx.source.countryCode,
+        channel: ctx.source.channel,
+        message: `Ingestion run failed at step '${step.name}': ${lastError}`,
+      });
+
       return;
     }
   }
