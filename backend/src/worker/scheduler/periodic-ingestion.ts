@@ -37,6 +37,13 @@ export async function queueDueIngestionRuns(prisma: PrismaClient, boss: PgBoss):
       runId: run.id,
     });
 
+    // Update nextRunAt to prevent duplicate queuing
+    const nextRunAt = new Date(now.getTime() + (source.crawlFrequencyMinutes ?? 60) * 60_000);
+    await prisma.source.update({
+      where: { id: source.id },
+      data: { nextRunAt, lastRunAt: now },
+    });
+
     queued++;
   }
 

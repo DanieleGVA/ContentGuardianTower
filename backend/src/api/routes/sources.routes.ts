@@ -187,8 +187,24 @@ export default async function sourcesRoutes(app: FastifyInstance) {
         message: `Manual ingestion triggered for source '${source.displayName}'`,
       });
 
-      // Queue the ingestion job (pgboss integration in Phase 3)
-      return { message: 'Ingestion run queued', sourceId: id };
+      // Create the ingestion run record
+      const run = await app.prisma.ingestionRun.create({
+        data: {
+          runType: source.channel === 'WEB' ? 'CRAWL' : 'SOCIAL_PULL',
+          sourceId: source.id,
+          channel: source.channel,
+          countryCode: source.countryCode,
+          status: 'RUNNING',
+        },
+      });
+
+      // Queue the pgboss job
+      await app.boss.send('ingestion-run', {
+        sourceId: source.id,
+        runId: run.id,
+      });
+
+      return { message: 'Ingestion run queued', sourceId: id, runId: run.id };
     },
   );
 }

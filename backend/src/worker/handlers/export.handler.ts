@@ -11,8 +11,8 @@ interface ExportJobData {
 
 const STORAGE_DIR = process.env.EXPORT_STORAGE_DIR || './storage/exports';
 
-export function registerExportHandler(boss: PgBoss, prisma: PrismaClient) {
-  boss.work<ExportJobData>('export-csv', async (jobs) => {
+export async function registerExportHandler(boss: PgBoss, prisma: PrismaClient) {
+  await boss.work<ExportJobData>('export-csv', async (jobs) => {
     const job = Array.isArray(jobs) ? jobs[0] : jobs;
     const { exportId } = job.data;
 

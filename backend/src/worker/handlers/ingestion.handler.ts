@@ -7,8 +7,8 @@ interface IngestionJobData {
   runId: string;
 }
 
-export function registerIngestionHandler(boss: PgBoss, prisma: PrismaClient) {
-  boss.work<IngestionJobData>('ingestion-run', async (jobs) => {
+export async function registerIngestionHandler(boss: PgBoss, prisma: PrismaClient) {
+  await boss.work<IngestionJobData>('ingestion-run', async (jobs) => {
     const job = Array.isArray(jobs) ? jobs[0] : jobs;
     const { sourceId, runId } = job.data;
     console.log(`Processing ingestion run ${runId} for source ${sourceId}`);

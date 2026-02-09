@@ -18,6 +18,7 @@ const prisma = new PrismaClient();
 declare module 'fastify' {
   interface FastifyInstance {
     prisma: PrismaClient;
+    boss: PgBoss;
     authenticate: (request: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) => Promise<void>;
   }
 }
@@ -99,8 +100,8 @@ async function startWorker() {
   await boss.start();
   console.log('pgboss worker started');
 
-  // Register job handlers
-  registerWorkerHandlers(boss, prisma);
+  // Register job handlers (must await for pgboss v10 subscriptions)
+  await registerWorkerHandlers(boss, prisma);
 
   return boss;
 }
@@ -108,6 +109,9 @@ async function startWorker() {
 async function main() {
   const app = await buildApp();
   const boss = await startWorker();
+
+  // Decorate app with boss so routes can send jobs
+  app.decorate('boss', boss);
 
   // Start scheduler
   const schedulerInterval = startScheduler(prisma, boss);
